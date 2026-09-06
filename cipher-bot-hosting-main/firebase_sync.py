@@ -28,6 +28,29 @@ FIREBASE_CONFIG = {
 FIREBASE_DATABASE_URL = FIREBASE_CONFIG["databaseURL"]
 FIREBASE_DATABASE_SECRET = os.environ.get("FIREBASE_DATABASE_SECRET", "").strip()
 
+_LAST_401_WARNED = 0
+
+
+def _log_401_warning() -> None:
+    global _LAST_401_WARNED
+    now = time.time()
+    # Log warning at most once every 15 minutes to keep production logs clean
+    if now - _LAST_401_WARNED > 900:
+        _LAST_401_WARNED = now
+        print(
+            "[firebase_sync] ℹ️ Firebase RTDB returned 401 Unauthorized.\n"
+            "   Cause: Database security rules are locked.\n"
+            "   Solution: In Firebase Console -> Realtime Database -> Rules, set:\n"
+            "   {\n"
+            '     "rules": {\n'
+            '       ".read": true,\n'
+            '       ".write": true\n'
+            "     }\n"
+            "   }\n"
+            "   (Or add FIREBASE_DATABASE_SECRET to Render Environment Variables).",
+            flush=True
+        )
+
 
 def _build_url(endpoint: str) -> str:
     path = endpoint.lstrip("/")
@@ -48,10 +71,11 @@ def test_firebase_connection() -> dict:
             return {"ok": True, "status": resp.status, "message": "Connected to Firebase RTDB"}
     except urllib.error.HTTPError as e:
         if e.code == 401:
+            _log_401_warning()
             return {
                 "ok": False,
                 "status": 401,
-                "message": "Unauthorized. Please set Firebase RTDB rules to { '.read': true, '.write': true } or provide FIREBASE_DATABASE_SECRET in .env."
+                "message": "Unauthorized. Set Firebase RTDB rules to { '.read': true, '.write': true } or provide FIREBASE_DATABASE_SECRET."
             }
         return {"ok": False, "status": e.code, "message": f"HTTP Error {e.code}: {e.reason}"}
     except Exception as e:
@@ -68,6 +92,12 @@ def sync_payment_methods_to_firebase(payment_methods: dict) -> bool:
         req.add_header("User-Agent", "CipherBotHosting/2.1")
         with urllib.request.urlopen(req, timeout=5) as resp:
             return resp.status in (200, 204)
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            _log_401_warning()
+        else:
+            print(f"[firebase_sync] payment_methods HTTP {e.code}: {e.reason}", flush=True)
+        return False
     except Exception as e:
         print(f"[firebase_sync] payment_methods sync: {e}", flush=True)
         return False
@@ -88,6 +118,12 @@ def sync_bot_status_to_firebase(status_data: dict) -> bool:
         req.add_header("User-Agent", "CipherBotHosting/2.1")
         with urllib.request.urlopen(req, timeout=5) as resp:
             return resp.status in (200, 204)
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            _log_401_warning()
+        else:
+            print(f"[firebase_sync] bot_status HTTP {e.code}: {e.reason}", flush=True)
+        return False
     except Exception as e:
         print(f"[firebase_sync] bot_status sync: {e}", flush=True)
         return False
@@ -103,6 +139,10 @@ def sync_deployed_bot_to_firebase(bot_id: str, bot_data: dict) -> bool:
         req.add_header("User-Agent", "CipherBotHosting/2.1")
         with urllib.request.urlopen(req, timeout=5) as resp:
             return resp.status in (200, 204)
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            _log_401_warning()
+        return False
     except Exception as e:
         print(f"[firebase_sync] deployed_bot sync: {e}", flush=True)
         return False
@@ -118,6 +158,9 @@ def get_firebase_payment_methods() -> dict:
             data = resp.read().decode("utf-8")
             if data and data != "null":
                 return json.loads(data)
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            _log_401_warning()
     except Exception as e:
         print(f"[firebase_sync] get_payment_methods: {e}", flush=True)
     return {}

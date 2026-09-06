@@ -38,3 +38,5 @@ services:
         value: "bot-host-website-9f118.firebasestorage.app"
       - key: FIREBASE_APP_ID
         value: "1:11293173080:web:2a6dbf296e61378b03b12d"
+      - key: WEBHOOK_ENABLED
+        value: "true"

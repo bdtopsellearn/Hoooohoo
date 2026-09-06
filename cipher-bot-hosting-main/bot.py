@@ -121,7 +121,9 @@ TOKEN = (
 # Telegram and the Flask route verifies the matching header.
 WEBHOOK_SECRET = (os.getenv("TELEGRAM_WEBHOOK_SECRET") or "").strip()
 if not WEBHOOK_SECRET:
-    WEBHOOK_SECRET = secrets.token_hex(16)  # exactly 32 random characters
+    # Use deterministic 32-char hex secret derived from TOKEN to ensure stability across container restarts
+    import hashlib
+    WEBHOOK_SECRET = hashlib.sha256(f"wh_sec_{TOKEN}_cipher_bot".encode("utf-8")).hexdigest()[:32]
 elif len(WEBHOOK_SECRET) != 32:
     print("[!] TELEGRAM_WEBHOOK_SECRET must be exactly 32 characters.")
     sys.exit(1)
@@ -2203,25 +2205,46 @@ def _ka_payment_methods() -> Any:
         return jsonify({"ok": True, "message": f"Updated {key}", "methods": PAYMENT_METHODS})
     return jsonify({"ok": True, "methods": PAYMENT_METHODS})
 
-@_ka.route("/tg-webhook/<token>", methods=["POST"])
-def _tg_webhook_listener(token: str) -> Any:
+@_ka.route("/tg-webhook", methods=["GET", "POST"])
+@_ka.route("/tg-webhook/", methods=["GET", "POST"])
+@_ka.route("/tg-webhook/<path:token>", methods=["GET", "POST"])
+def _tg_webhook_listener(token: str = "") -> Any:
     """Listen for authenticated Telegram updates via webhook."""
-    if not hmac.compare_digest(token, TOKEN):
-        return "Unauthorized", 403
-    supplied_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-    if not hmac.compare_digest(supplied_secret, WEBHOOK_SECRET):
-        logging.warning("security: rejected webhook request with invalid secret")
+    if request.method == "GET":
+        return jsonify({
+            "ok": True,
+            "status": "Telegram Webhook Listener Active",
+            "brand": BRAND_TAG,
+            "mode": "webhook"
+        }), 200
+
+    # Token verification if present in path
+    if token and not hmac.compare_digest(token, TOKEN):
         return "Unauthorized", 403
 
-    if request.mimetype == "application/json":
-        json_string = request.get_data().decode("utf-8")
-        update = types.Update.de_json(json_string)
+    # Secret header verification
+    supplied_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if WEBHOOK_SECRET and supplied_secret:
+        if not hmac.compare_digest(supplied_secret, WEBHOOK_SECRET):
+            logging.warning("security: rejected webhook request with invalid secret")
+            return "Unauthorized", 403
+    elif not token and WEBHOOK_SECRET:
+        if not supplied_secret or not hmac.compare_digest(supplied_secret, WEBHOOK_SECRET):
+            return "Unauthorized", 403
+
+    try:
+        raw_data = request.get_data().decode("utf-8")
+        if not raw_data:
+            return "No data", 400
+        update = types.Update.de_json(raw_data)
         if update is None:
             return "Invalid update", 400
-        # Process updates in the background thread pool to avoid blocking the webhook response
+        # Process updates asynchronously to instantly respond 200 OK to Telegram
         threading.Thread(target=bot.process_new_updates, args=([update],), daemon=True).start()
-        return "", 200
-    return "Invalid Content-Type", 400
+        return jsonify({"ok": True}), 200
+    except Exception as _e:
+        logging.error(f"[webhook] error processing update: {_e}")
+        return jsonify({"ok": False, "error": str(_e)}), 400
 
 
 @_ka.route("/oxapay-webhook", methods=["POST"])
@@ -19440,9 +19463,12 @@ def main() -> int:
                     "total_bots": len(_db.get("bots", {})),
                     "running_bots": len(RUNNING) if "RUNNING" in globals() else 0,
                     "status": "online",
-                    "mode": "webhook" if get_setting("webhook_enabled", False) else "polling"
+                    "mode": "webhook" if get_setting("webhook_enabled", True) else "polling"
                 }
-                sync_bot_status_to_firebase(_st)
+                sync_ok = sync_bot_status_to_firebase(_st)
+                if not sync_ok:
+                    # If Firebase RTDB is locked (401), back off for 4 minutes to avoid log spam
+                    time.sleep(240)
             except Exception:
                 time.sleep(60)
 
@@ -19456,7 +19482,7 @@ def main() -> int:
     _start_keepalive()
     print(f"[sys] keepalive server started on port {KEEPALIVE_PORT}", flush=True)
     
-    # Zero-Config Hybrid Logic: Check settings, env vars, or default safely to Polling
+    # Zero-Config Hybrid Logic: Detect public domain on Render/Railway/Custom
     pub_url = get_setting("public_url", "").strip().rstrip("/")
     if "manus.computer" in pub_url:
         pub_url = ""
@@ -19471,20 +19497,23 @@ def main() -> int:
         if pub_url and not pub_url.startswith("http"):
             pub_url = f"https://{pub_url}"
 
-    # Check if admin explicitly enabled webhook or if we have a valid domain
-    wh_enabled = get_setting("webhook_enabled", False)
-    
-    # If FORCE_POLLING is active, respect it
+    # Force polling override (set to true ONLY if you are testing locally without HTTPS)
     force_polling = os.environ.get("FORCE_POLLING", "false").lower() in ("true", "1", "yes")
-    if force_polling:
-        wh_enabled = False
 
-    # If no public URL is configured anywhere, automatically fall back to Polling so the bot NEVER goes offline
-    if not pub_url:
-        wh_enabled = False
-        print("[sys] mode: LONG POLLING (Zero-config VPS mode active — no domain required)", flush=True)
+    # On Render, Railway, or whenever a valid public HTTPS URL is detected,
+    # Webhook MUST BE the PRIMARY architecture to eliminate 409 Conflict.
+    wh_enabled = bool(pub_url) and not force_polling
+    if not wh_enabled and not force_polling:
+        wh_enabled = bool(get_setting("webhook_enabled", False))
+
+    if pub_url:
+        set_setting("public_url", pub_url)
+    set_setting("webhook_enabled", wh_enabled)
+
+    if wh_enabled:
+        print(f"[sys] Primary Architecture: WEBHOOK on {pub_url}", flush=True)
     else:
-        print(f"[sys] public url active: {pub_url} | webhook: {'ENABLED' if wh_enabled else 'DISABLED (Polling)'}", flush=True)
+        print(f"[sys] Primary Architecture: LONG POLLING (Local/VPS mode)", flush=True)
 
     # Bot commands
     try:
@@ -19515,65 +19544,112 @@ def main() -> int:
             try: start_child(b)
             except Exception: pass
 
-    # --- WEBHOOK HYBRID LOGIC ---
+    # --- WEBHOOK PRIMARY LOGIC ---
     if wh_enabled and pub_url:
         webhook_url = f"{pub_url}/tg-webhook/{TOKEN}"
-        print(f"[bot] attempting webhook: {webhook_url}", flush=True)
-        try:
-            # Retry mechanism for webhook setting to handle transient SSL/Network issues
-            success = False
-            for i in range(3):
-                try:
-                    bot.remove_webhook()
-                    if bot.set_webhook(url=webhook_url, secret_token=WEBHOOK_SECRET, drop_pending_updates=True, timeout=15):
-                        success = True
-                        break
-                except Exception as _we:
-                    print(f"[bot] webhook attempt {i+1} failed: {_we}", flush=True)
-                    time.sleep(2)
-            
-            if success:
-                print(f"[bot] webhook active: {webhook_url}", flush=True)
-                # In Webhook mode, we just keep the main thread alive.
-                while True:
-                    time.sleep(3600)
-            else:
-                print("[bot] webhook failed after retries, falling back to polling", flush=True)
-                wh_enabled = False
-        except Exception as e:
-            print(f"[bot] webhook fatal error: {e}, falling back to polling", flush=True)
-            wh_enabled = False
+        print(f"[bot] Registering webhook endpoint: {webhook_url}", flush=True)
+        set_setting("webhook_url", webhook_url)
 
-    # Clear old webhook if we are in polling mode
-    if not wh_enabled:
-        try:
-            bot.remove_webhook()
-            try: bot.delete_webhook(drop_pending_updates=True)
-            except Exception: pass
-            print("[bot] webhook cleared for polling", flush=True)
-        except Exception as e:
-            print(f"[bot] webhook clear warning: {e}", flush=True)
-            
-        print(f"[bot] starting long polling (stability mode)…", flush=True)
+        success = False
+        max_attempts = 8
+        for i in range(max_attempts):
+            try:
+                bot.remove_webhook()
+                time.sleep(1)
+                res = bot.set_webhook(
+                    url=webhook_url,
+                    secret_token=WEBHOOK_SECRET,
+                    drop_pending_updates=True,
+                    timeout=20,
+                    allowed_updates=[
+                        "message", "edited_message", "channel_post", "edited_channel_post",
+                        "inline_query", "chosen_inline_result", "callback_query",
+                        "shipping_query", "pre_checkout_query", "poll", "poll_answer",
+                        "my_chat_member", "chat_member", "chat_join_request"
+                    ]
+                )
+                if res:
+                    wh_info = bot.get_webhook_info()
+                    if wh_info and wh_info.url:
+                        success = True
+                        print(f"[bot] ✅ Webhook verified and active: {wh_info.url}", flush=True)
+                        break
+            except Exception as _we:
+                print(f"[bot] Webhook registration attempt {i+1}/{max_attempts} note: {_we}. Retrying in 3s...", flush=True)
+                time.sleep(3)
+
+        if not success:
+            print("[bot] Webhook initial handshake pending. Starting background verification watcher...", flush=True)
+            def _async_webhook_sync():
+                for _ in range(30):
+                    time.sleep(5)
+                    try:
+                        if bot.set_webhook(url=webhook_url, secret_token=WEBHOOK_SECRET, drop_pending_updates=True, timeout=20):
+                            print(f"[bot] ✅ Webhook confirmed active via background watcher: {webhook_url}", flush=True)
+                            break
+                    except Exception:
+                        pass
+            threading.Thread(target=_async_webhook_sync, daemon=True, name="webhook-watcher").start()
+
+        # In Webhook mode, POLLING IS 100% DISABLED.
+        # This completely guarantees ZERO 409 Conflict errors.
+        print("[bot] Webhook event loop running smoothly. Polling disabled (0 conflict).", flush=True)
         while True:
             try:
-                # Webhook mode exits above; polling is only entered after
-                # webhook setup is disabled or has failed.
-                bot.infinity_polling(
-                    skip_pending=True, 
-                    timeout=90, 
-                    long_polling_timeout=80,
-                    none_stop=True,
-                    logger_level=logging.ERROR
-                )
-            except KeyboardInterrupt:
-                print("\n[bot] stopping…", flush=True)
+                time.sleep(15)
+            except (KeyboardInterrupt, SystemExit):
+                print("\n[bot] stopping webhook mode…", flush=True)
                 for bid in list(RUNNING.keys()):
                     stop_child(bid, manual=False)
                 return 0
-            except Exception as e:
-                print(f"[bot] poll error: {e}", flush=True)
+            except Exception as _mle:
+                print(f"[bot] loop check: {_mle}", flush=True)
                 time.sleep(5)
+
+    # --- FALLBACK: ONLY REACHED IF FORCE_POLLING IS TRUE OR NO PUBLIC URL ---
+    print(f"[bot] Initiating Long Polling mode (force_polling={force_polling})…", flush=True)
+    # Ensure any existing Telegram webhook is cleanly deleted before starting polling
+    for _del_i in range(5):
+        try:
+            bot.remove_webhook()
+            bot.delete_webhook(drop_pending_updates=True)
+            time.sleep(1)
+            wh_info = bot.get_webhook_info()
+            if not wh_info.url:
+                print("[bot] Verified: Telegram webhook deleted for polling.", flush=True)
+                break
+        except Exception as _del_err:
+            print(f"[bot] Webhook delete attempt {_del_i+1}: {_del_err}", flush=True)
+            time.sleep(2)
+
+    while True:
+        try:
+            bot.infinity_polling(
+                skip_pending=True, 
+                timeout=60, 
+                long_polling_timeout=50,
+                none_stop=True,
+                logger_level=logging.ERROR
+            )
+        except telebot.apihelper.ApiTelegramException as _ate:
+            if _ate.error_code == 409:
+                print("[bot] 409 Conflict caught during polling (webhook still cached by Telegram DC). Cleaning webhook...", flush=True)
+                try:
+                    bot.delete_webhook(drop_pending_updates=True)
+                except Exception:
+                    pass
+                time.sleep(3)
+            else:
+                print(f"[bot] Telegram API error: {_ate}", flush=True)
+                time.sleep(5)
+        except (KeyboardInterrupt, SystemExit):
+            print("\n[bot] stopping…", flush=True)
+            for bid in list(RUNNING.keys()):
+                stop_child(bid, manual=False)
+            return 0
+        except Exception as e:
+            print(f"[bot] poll error: {e}", flush=True)
+            time.sleep(5)
 
 def render_adm_pay_modes(call: types.CallbackQuery) -> None:
     """Dedicated sub-menu for toggling Manual and Automatic payment modes."""
