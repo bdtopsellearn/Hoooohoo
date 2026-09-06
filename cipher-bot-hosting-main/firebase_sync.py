@@ -165,3 +165,206 @@ def get_firebase_payment_methods() -> dict:
         print(f"[firebase_sync] get_payment_methods: {e}", flush=True)
     return {}
 
+
+# ═════════════════════════════════════════════════════════════════
+# FULL DATABASE & BOT CLOUD PERSISTENCE (Anti-Wipe on Render Restarts)
+# ═════════════════════════════════════════════════════════════════
+
+import base64
+from pathlib import Path
+
+
+def sync_full_database_to_firebase(db_data: dict) -> bool:
+    """Persist the complete panel_db (users, bots, plans) to Firebase RTDB."""
+    try:
+        url = _build_url("cipher_vault/panel_db.json")
+        # Sanitize any non-serializable objects
+        payload = json.dumps(db_data, default=str).encode("utf-8")
+        req = urllib.request.Request(url, data=payload, method="PUT")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("User-Agent", "CipherBotHosting/2.1")
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            return resp.status in (200, 204)
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            _log_401_warning()
+        return False
+    except Exception as e:
+        print(f"[firebase_sync] db sync error: {e}", flush=True)
+        return False
+
+
+def fetch_full_database_from_firebase() -> dict:
+    """Fetch panel_db from Firebase RTDB."""
+    try:
+        url = _build_url("cipher_vault/panel_db.json")
+        req = urllib.request.Request(url, method="GET")
+        req.add_header("User-Agent", "CipherBotHosting/2.1")
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = resp.read().decode("utf-8")
+            if data and data != "null":
+                res = json.loads(data)
+                if isinstance(res, dict) and "users" in res:
+                    return res
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            _log_401_warning()
+    except Exception as e:
+        print(f"[firebase_sync] db fetch error: {e}", flush=True)
+    return {}
+
+
+def sync_full_settings_to_firebase(settings_data: dict) -> bool:
+    """Persist panel_settings to Firebase RTDB."""
+    try:
+        url = _build_url("cipher_vault/panel_settings.json")
+        payload = json.dumps(settings_data, default=str).encode("utf-8")
+        req = urllib.request.Request(url, data=payload, method="PUT")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("User-Agent", "CipherBotHosting/2.1")
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            return resp.status in (200, 204)
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            _log_401_warning()
+        return False
+    except Exception as e:
+        print(f"[firebase_sync] settings sync error: {e}", flush=True)
+        return False
+
+
+def fetch_full_settings_from_firebase() -> dict:
+    """Fetch panel_settings from Firebase RTDB."""
+    try:
+        url = _build_url("cipher_vault/panel_settings.json")
+        req = urllib.request.Request(url, method="GET")
+        req.add_header("User-Agent", "CipherBotHosting/2.1")
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = resp.read().decode("utf-8")
+            if data and data != "null":
+                res = json.loads(data)
+                if isinstance(res, dict):
+                    return res
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            _log_401_warning()
+    except Exception as e:
+        print(f"[firebase_sync] settings fetch error: {e}", flush=True)
+    return {}
+
+
+def sync_key_to_firebase(key_id: str, key_bytes: bytes, meta: dict = None) -> bool:
+    """Save encryption key to Firebase so decrypted files can be restored after restart."""
+    try:
+        url = _build_url(f"cipher_vault/keys/{key_id}.json")
+        payload = {
+            "key": key_bytes.decode("latin1") if isinstance(key_bytes, bytes) else str(key_bytes),
+            "meta": meta or {},
+            "ts": int(time.time()),
+        }
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=data, method="PUT")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("User-Agent", "CipherBotHosting/2.1")
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            return resp.status in (200, 204)
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            _log_401_warning()
+        return False
+    except Exception as e:
+        print(f"[firebase_sync] key sync error: {e}", flush=True)
+        return False
+
+
+def fetch_all_keys_from_firebase() -> dict:
+    """Fetch all stored encryption keys from Firebase."""
+    try:
+        url = _build_url("cipher_vault/keys.json")
+        req = urllib.request.Request(url, method="GET")
+        req.add_header("User-Agent", "CipherBotHosting/2.1")
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = resp.read().decode("utf-8")
+            if data and data != "null":
+                return json.loads(data)
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            _log_401_warning()
+    except Exception as e:
+        print(f"[firebase_sync] keys fetch error: {e}", flush=True)
+    return {}
+
+
+def sync_encfile_to_firebase(key_id: str, enc_bytes: bytes, rel_path: str = "") -> bool:
+    """Sync encrypted bot binary payload to Firebase RTDB."""
+    try:
+        url = _build_url(f"cipher_vault/enc_files/{key_id}.json")
+        payload = {
+            "key_id": key_id,
+            "rel_path": rel_path,
+            "b64": base64.b64encode(enc_bytes).decode("ascii"),
+            "size": len(enc_bytes),
+            "uploaded": int(time.time()),
+        }
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=data, method="PUT")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("User-Agent", "CipherBotHosting/2.1")
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            return resp.status in (200, 204)
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            _log_401_warning()
+        return False
+    except Exception as e:
+        print(f"[firebase_sync] encfile sync error: {e}", flush=True)
+        return False
+
+
+def fetch_encfile_from_firebase(key_id: str) -> bytes:
+    """Fetch encrypted bot file from Firebase RTDB."""
+    try:
+        url = _build_url(f"cipher_vault/enc_files/{key_id}.json")
+        req = urllib.request.Request(url, method="GET")
+        req.add_header("User-Agent", "CipherBotHosting/2.1")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = resp.read().decode("utf-8")
+            if data and data != "null":
+                doc = json.loads(data)
+                b64 = doc.get("b64")
+                if b64:
+                    return base64.b64decode(b64.encode("ascii"))
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            _log_401_warning()
+    except Exception as e:
+        print(f"[firebase_sync] encfile fetch error: {e}", flush=True)
+    return b""
+
+
+def delete_bot_from_firebase(bot_id: str, key_ids: list = None) -> bool:
+    """Delete bot records and associated files from Firebase when user deletes a bot."""
+    try:
+        url = _build_url(f"deployed_bots/{bot_id}.json")
+        req = urllib.request.Request(url, method="DELETE")
+        req.add_header("User-Agent", "CipherBotHosting/2.1")
+        try:
+            urllib.request.urlopen(req, timeout=5)
+        except Exception:
+            pass
+
+        if key_ids:
+            for kid in key_ids:
+                try:
+                    k_url = _build_url(f"cipher_vault/keys/{kid}.json")
+                    urllib.request.urlopen(urllib.request.Request(k_url, method="DELETE"), timeout=4)
+                    f_url = _build_url(f"cipher_vault/enc_files/{kid}.json")
+                    urllib.request.urlopen(urllib.request.Request(f_url, method="DELETE"), timeout=4)
+                except Exception:
+                    pass
+        return True
+    except Exception as e:
+        print(f"[firebase_sync] delete_bot error: {e}", flush=True)
+        return False
+
+
