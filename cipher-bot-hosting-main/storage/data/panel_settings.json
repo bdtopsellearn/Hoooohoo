@@ -1,0 +1,69 @@
+{
+  "settings": {
+    "owner_id": 7831629041,
+    "owner_username": "CODINGJAMES_X",
+    "admin_handle": "@CODINGJAMES_X",
+    "brand_name": "⟦𝗖𝗢𝗗𝗜𝗡𝗚_𝙃𝙊𝙎𝙏𝙄𝙉𝙂⟧",
+    "pending_uploads": {}
+  },
+  "payment_methods_custom": {
+    "bkash": {
+      "name": "bKash",
+      "number": "",
+      "type": "Send Money",
+      "tag": "[B]"
+    },
+    "nagad": {
+      "name": "Nagad",
+      "number": "",
+      "type": "Send Money",
+      "tag": "[N]"
+    },
+    "rocket": {
+      "name": "Rocket",
+      "number": "",
+      "type": "Send Money",
+      "tag": "[R]"
+    },
+    "upay": {
+      "name": "Upay",
+      "number": "",
+      "type": "Send Money",
+      "tag": "[U]"
+    },
+    "binance": {
+      "name": "Binance Pay",
+      "number": "",
+      "type": "USDT (BEP20/TRC20)",
+      "tag": "[BP]"
+    },
+    "trustwallet": {
+      "name": "Trust Wallet",
+      "number": "",
+      "type": "USDT (BEP20/TRC20)",
+      "tag": "[TW]"
+    },
+    "bank": {
+      "name": "Bank",
+      "number": "",
+      "type": "Bank Transfer",
+      "tag": "[BK]"
+    }
+  },
+  "metrics_total": {
+    "messages_received": 0,
+    "callbacks_received": 0,
+    "bot_starts": 0,
+    "bot_stops": 0,
+    "bot_crashes": 0,
+    "uploads": 0,
+    "errors": 0,
+    "commands": 0,
+    "plan_upgrades": 0,
+    "payments_received": 0
+  },
+  "payment_manual_enabled": true,
+  "pm_enabled_bank": false,
+  "pm_enabled_trustwallet": false,
+  "pm_enabled_upay": false
+}

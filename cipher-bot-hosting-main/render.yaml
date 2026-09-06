@@ -1,0 +1,40 @@
+services:
+  # ─── ⟦𝗖𝗢𝗗𝗜𝗡𝗚_𝙃𝙊𝙎𝙏𝙄𝙉𝙂⟧ Telegram Bot & Keepalive Web Service ───
+  - type: web
+    name: coding-hosting-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    plan: free
+    region: oregon
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: PORT
+        value: 10000
+      - key: BOT_TOKEN
+        value: 8975432264:AAH6xBY7QEB8IYxoCyW_0iAsVFCC0DQtVdk
+      - key: OWNER_ID
+        value: "7831629041"
+      - key: ADMIN_HANDLE
+        value: "@CODINGJAMES_X"
+      - key: BRAND_NAME
+        value: "⟦𝗖𝗢𝗗𝗜𝗡𝗚_𝙃𝙊𝙎𝙏𝙄𝙉𝙂⟧"
+      - key: SUPPORT_USR
+        value: "@CODINGJAMES_X"
+      - key: UPDATE_CH
+        value: "https://t.me/CODINGJAMES_X"
+      - key: FIREBASE_DATABASE_URL
+        value: "https://bot-host-website-9f118-default-rtdb.firebaseio.com"
+      - key: FIREBASE_PROJECT_ID
+        value: "bot-host-website-9f118"
+      - key: FIREBASE_API_KEY
+        value: "AIzaSyAIw4w6nMR440pZh-zw4GBsd0o0fUllgSo"
+      - key: FIREBASE_AUTH_DOMAIN
+        value: "bot-host-website-9f118.firebaseapp.com"
+      - key: FIREBASE_STORAGE_BUCKET
+        value: "bot-host-website-9f118.firebasestorage.app"
+      - key: FIREBASE_APP_ID
+        value: "1:11293173080:web:2a6dbf296e61378b03b12d"

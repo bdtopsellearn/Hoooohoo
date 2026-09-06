@@ -1,0 +1,6 @@
+{
+  "name": "Cipher Bot Hosting",
+  "description": "Bot hosting control panel with node sandbox management, security preflight scanning, and encrypted vault synchronization.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
