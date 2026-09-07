@@ -28,7 +28,48 @@ FIREBASE_CONFIG = {
 FIREBASE_DATABASE_URL = FIREBASE_CONFIG["databaseURL"]
 FIREBASE_DATABASE_SECRET = os.environ.get("FIREBASE_DATABASE_SECRET", "").strip()
 
+# Built-in authenticated cloud sync credentials
+_AUTH_EMAIL = os.environ.get("FIREBASE_AUTH_EMAIL", "cipher_server_worker@gmail.com")
+_AUTH_PASSWORD = os.environ.get("FIREBASE_AUTH_PASSWORD", "CipherSecuredCloudSync2026!")
+_CACHED_ID_TOKEN = ""
+_TOKEN_EXPIRES_AT = 0
 _LAST_401_WARNED = 0
+
+
+def _get_auth_param() -> str:
+    """Returns database secret or active Firebase Auth ID token."""
+    global _CACHED_ID_TOKEN, _TOKEN_EXPIRES_AT
+    if FIREBASE_DATABASE_SECRET:
+        return FIREBASE_DATABASE_SECRET
+    
+    # Check cached auth token
+    now = time.time()
+    if _CACHED_ID_TOKEN and now < _TOKEN_EXPIRES_AT - 120:
+        return _CACHED_ID_TOKEN
+    
+    # Obtain fresh ID token via Identity Toolkit
+    try:
+        api_key = FIREBASE_CONFIG.get("apiKey", "")
+        if not api_key or not _AUTH_EMAIL or not _AUTH_PASSWORD:
+            return ""
+        url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={api_key}"
+        payload = json.dumps({
+            "email": _AUTH_EMAIL,
+            "password": _AUTH_PASSWORD,
+            "returnSecureToken": True
+        }).encode("utf-8")
+        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            token = data.get("idToken", "")
+            expires_in = int(data.get("expiresIn", 3600))
+            if token:
+                _CACHED_ID_TOKEN = token
+                _TOKEN_EXPIRES_AT = now + expires_in
+                return token
+    except Exception:
+        pass
+    return ""
 
 
 def _log_401_warning() -> None:
@@ -39,7 +80,7 @@ def _log_401_warning() -> None:
         _LAST_401_WARNED = now
         print(
             "[firebase_sync] ℹ️ Firebase RTDB returned 401 Unauthorized.\n"
-            "   Cause: Database security rules are locked.\n"
+            "   Cause: Database security rules in Firebase Console require update.\n"
             "   Solution: In Firebase Console -> Realtime Database -> Rules, set:\n"
             "   {\n"
             '     "rules": {\n'
@@ -47,7 +88,7 @@ def _log_401_warning() -> None:
             '       ".write": true\n'
             "     }\n"
             "   }\n"
-            "   (Or add FIREBASE_DATABASE_SECRET to Render Environment Variables).",
+            "   (Or add FIREBASE_DATABASE_SECRET to your environment variables).",
             flush=True
         )
 
@@ -55,9 +96,10 @@ def _log_401_warning() -> None:
 def _build_url(endpoint: str) -> str:
     path = endpoint.lstrip("/")
     url = f"{FIREBASE_DATABASE_URL}/{path}"
-    if FIREBASE_DATABASE_SECRET:
+    auth = _get_auth_param()
+    if auth:
         separator = "&" if "?" in url else "?"
-        url = f"{url}{separator}auth={FIREBASE_DATABASE_SECRET}"
+        url = f"{url}{separator}auth={auth}"
     return url
 
 

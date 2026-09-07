@@ -1,0 +1,120 @@
+{
+  "settings": {
+    "bot_name": "𝗗𝗫𝗔 𝗣𝗔𝗜𝗗 𝗭𝗢𝗡𝗘 💎",
+    "welcome_text": "𝙒𝙀𝙇𝘾𝙊𝙈𝙀 𝙏𝙊 𝙋𝙍𝙀𝙈𝙄𝙐𝙈 𝙎𝙃𝙊𝙋 𝘽𝙊𝙏",
+    "currency_symbol": "৳",
+    "currency_name": "BDT",
+    "local_currency": "BDT",
+    "exchange_rate": 125,
+    "referral_pct": 5.0,
+    "deposit_open": true,
+    "withdraw_open": true,
+    "min_deposit": 20.0,
+    "min_withdraw": 50.0,
+    "support_link": "https://t.me/bd_top_admin",
+    "admin_ids": [7831629041],
+    "force_join_enabled": false,
+    "dev_name": "@bd_top_admin",
+    "dev_url": "https://t.me/bd_top_admin",
+    "payment_methods": {
+      "bkash": {
+        "enabled": true,
+        "name": "𝗕𝗸𝗮𝘀𝗵 Personal",
+        "number": "01XXXXXXXXX"
+      },
+      "nagad": {
+        "enabled": true,
+        "name": "𝗡𝗮𝗴𝗮𝗱 Personal",
+        "number": "01XXXXXXXXX"
+      },
+      "rocket": {
+        "enabled": true,
+        "name": "𝗥𝗼𝗰𝗸𝗲𝘁 Personal",
+        "number": "01XXXXXXXXX"
+      },
+      "binance": {
+        "enabled": false,
+        "name": "𝗕𝗶𝗻𝗮𝗻𝗰𝗲 𝗨𝗦𝗗𝗧",
+        "address": ""
+      }
+    }
+  },
+  "categories": {
+    "cat_shop": {
+      "name": "🛍️ Shop & Selling Bots",
+      "products": {
+        "prod_sellingbot": {
+          "name": "💎 DXA Telegram Shop Bot (sellingbot.py)",
+          "price": 150.0,
+          "price_usd": 1.2,
+          "description": "Full Telegram digital store & automated script selling bot with bKash/Nagad/Rocket payments, instant auto-delivery, multi-tier RBAC, and cloud database.",
+          "stock": 999,
+          "is_file": true,
+          "file_name": "sellingbot.zip",
+          "file_path": "storage/shop_scripts/sellingbot.zip",
+          "demo_link": "https://t.me/bd_top_admin"
+        }
+      }
+    },
+    "cat_hosting": {
+      "name": "🌐 Bot Hosting & Panel Bots",
+      "products": {
+        "prod_hostingbot": {
+          "name": "🚀 Cipher Cloud Bot Hosting Platform (bot.py)",
+          "price": 250.0,
+          "price_usd": 2.0,
+          "description": "Enterprise Telegram Bot Hosting & Management system. Auto-restarts on crash, multi-user hosting, web dashboard, encrypted code storage, real-time logs.",
+          "stock": 999,
+          "is_file": true,
+          "file_name": "hostingbot.zip",
+          "file_path": "storage/shop_scripts/hostingbot.zip",
+          "demo_link": "https://t.me/bd_top_admin"
+        }
+      }
+    },
+    "cat_tools": {
+      "name": "⚡ Channel Tools & Utility Bots",
+      "products": {
+        "prod_autoreaction": {
+          "name": "⚡ Auto Reaction & View Booster Bot",
+          "price": 100.0,
+          "price_usd": 0.8,
+          "description": "Instant emoji reactions on new channel posts, view booster, multi-account rotation (Telethon/Pyrogram) with anti-flood safe delays.",
+          "stock": 999,
+          "is_file": true,
+          "file_name": "autoreaction.zip",
+          "file_path": "storage/shop_scripts/autoreaction.zip",
+          "demo_link": "https://t.me/bd_top_admin"
+        },
+        "prod_downloader": {
+          "name": "📥 All-in-One Social Video Downloader Bot",
+          "price": 120.0,
+          "price_usd": 0.96,
+          "description": "Fast video downloader for TikTok, Instagram, YouTube, Facebook, Twitter (X) without watermarks. High-speed media streaming.",
+          "stock": 999,
+          "is_file": true,
+          "file_name": "downloaderbot.zip",
+          "file_path": "storage/shop_scripts/downloaderbot.zip",
+          "demo_link": "https://t.me/bd_top_admin"
+        }
+      }
+    },
+    "cat_ai": {
+      "name": "🤖 AI & Chatbot Scripts",
+      "products": {
+        "prod_aichat": {
+          "name": "🧠 ChatGPT & Gemini Pro AI Telegram Bot",
+          "price": 120.0,
+          "price_usd": 0.96,
+          "description": "Multi-modal AI assistant powered by Gemini 2.5 / OpenAI. Supports text chat, voice memo transcription, image analysis, and group chat replies.",
+          "stock": 999,
+          "is_file": true,
+          "file_name": "aichatbot.zip",
+          "file_path": "storage/shop_scripts/aichatbot.zip",
+          "demo_link": "https://t.me/bd_top_admin"
+        }
+      }
+    }
+  },
+  "orders": {}
+}

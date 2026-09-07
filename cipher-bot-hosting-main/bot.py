@@ -46,7 +46,16 @@ from firebase_sync import (
     sync_bot_status_to_firebase,
     get_firebase_payment_methods,
     test_firebase_connection,
-    FIREBASE_CONFIG
+    FIREBASE_CONFIG,
+    sync_full_database_to_firebase,
+    fetch_full_database_from_firebase,
+    sync_full_settings_to_firebase,
+    fetch_full_settings_from_firebase,
+    sync_key_to_firebase,
+    fetch_all_keys_from_firebase,
+    sync_encfile_to_firebase,
+    fetch_encfile_from_firebase,
+    delete_bot_from_firebase,
 )
 
 _REQUIRED_PKGS = [
@@ -239,7 +248,8 @@ G = {
     "clock":    "\u23F1",       # ⏱
 }
 
-PLAN_LIMITS: Dict[str, Dict[str, Any]] = {    "free":       {"name": "Free",       "max_bots": 2,   "ram": 128,  "cpu": 50,  "auto_restart": False, "price": 0,    "days": 0},
+PLAN_LIMITS: Dict[str, Dict[str, Any]] = {
+    "free":       {"name": "Free",       "max_bots": 2,   "ram": 128,  "cpu": 50,  "auto_restart": True,  "price": 0,    "days": 0},
     "starter":    {"name": "Starter",    "max_bots": 4,   "ram": 256,  "cpu": 100, "auto_restart": True,  "price": 5,    "days": 30},
     "basic":      {"name": "Basic",      "max_bots": 6,   "ram": 512,  "cpu": 150, "auto_restart": True,  "price": 10,   "days": 30},
     "pro":        {"name": "Pro",        "max_bots": 8,   "ram": 2048, "cpu": 200, "auto_restart": True,  "price": 15,   "days": 30},
@@ -1173,6 +1183,7 @@ _PHOTO_SPECS: Dict[str, Tuple[str, str, str]] = {
     "gh_browser":    ("Gɪᴛʜᴜʙ Bʀᴏᴡꜱᴇʀ",  "#24292E", "Bʀᴏᴡꜱᴇ & Rᴜɴ"),
     "pay_config":    ("Pᴀʏᴍᴇɴᴛ Cᴏɴꜰɪɢ",   "#065F46", "Rᴀᴛᴇꜱ & Mᴇᴛʜᴏᴅꜱ"),
     "bot_config":    ("Bᴏᴛ Cᴏɴꜰɪɢ",        "#1F2937", "Lɪᴍɪᴛꜱ & Sᴀɴᴅʙᴏx"),
+    "shop":          ("Bᴏᴛ Sᴄʀɪᴘᴛꜱ",       "#991B1B", "Pʀᴇᴍɪᴜᴍ Sᴛᴏʀᴇ"),
     "appearance":    ("Aᴘᴘᴇᴀʀᴀɴᴄᴇ",        "#4338CA", "Tʜᴇᴍᴇ & Sᴛʏʟᴇ"),
     "templates":     ("Tᴇᴍᴘʟᴀᴛᴇꜱ",         "#0E7490", "Mᴇꜱꜱᴀɢᴇ Tᴇᴍᴘʟᴀᴛᴇꜱ"),
     "referral_adm":  ("Rᴇꜰᴇʀʀᴀʟ Sʏꜱ",     "#9333EA", "Iɴᴠɪᴛᴇ & Eᴀʀɴ"),
@@ -1472,11 +1483,23 @@ def _ensure_db_defaults(d: Dict[str, Any]) -> Dict[str, Any]:
     return d
 
 
+_FB_RESTORE_ATTEMPTED = False
+
 def db_load() -> Dict[str, Any]:
     """Load a MUTABLE copy of the user database. Use when you intend
     to mutate and `db_save()` back. For pure reads, use db_load_ro()
     — much faster."""
+    global _FB_RESTORE_ATTEMPTED
     with _db_lock:
+        if not _FB_RESTORE_ATTEMPTED and (not DB_FILE.exists() or DB_FILE.stat().st_size < 10):
+            _FB_RESTORE_ATTEMPTED = True
+            try:
+                remote_db = fetch_full_database_from_firebase()
+                if remote_db and isinstance(remote_db, dict) and remote_db.get("users"):
+                    print(f"[db] Restored full panel_db from Firebase RTDB! ({len(remote_db.get('bots', {}))} bots, {len(remote_db.get('users', {}))} users)", flush=True)
+                    _atomic_write(DB_FILE, remote_db)
+            except Exception as _e:
+                print(f"[db] Firebase initial restore notice: {_e}", flush=True)
         d = _cached_load(DB_FILE, {})
     return _ensure_db_defaults(d)
 
@@ -1485,32 +1508,60 @@ def db_load_ro() -> Dict[str, Any]:
     """Read-only DB access. NEVER mutate the result — it's the cached
     object itself. Mutation will silently corrupt every other reader
     sharing the cache."""
-    with _db_lock:
-        d = _cached_load_ro(DB_FILE, {})
-    return _ensure_db_defaults(d)
+    return db_load()
 
 
 def db_save(d: Dict[str, Any]) -> None:
     with _db_lock:
         _atomic_write(DB_FILE, d)
         _cache_invalidate(DB_FILE)
+    # Background sync to Firebase RTDB for cloud durability
+    try:
+        threading.Thread(
+            target=sync_full_database_to_firebase,
+            args=(copy.deepcopy(d),),
+            daemon=True,
+            name="firebase-db-sync"
+        ).start()
+    except Exception:
+        pass
 
+
+_FB_SETTINGS_RESTORE_ATTEMPTED = False
 
 def settings_load() -> Dict[str, Any]:
+    global _FB_SETTINGS_RESTORE_ATTEMPTED
     with _db_lock:
+        if not _FB_SETTINGS_RESTORE_ATTEMPTED and (not SETTINGS_FILE.exists() or SETTINGS_FILE.stat().st_size < 5):
+            _FB_SETTINGS_RESTORE_ATTEMPTED = True
+            try:
+                remote_s = fetch_full_settings_from_firebase()
+                if remote_s and isinstance(remote_s, dict):
+                    print("[settings] Restored settings from Firebase RTDB!", flush=True)
+                    _atomic_write(SETTINGS_FILE, remote_s)
+            except Exception:
+                pass
         return _cached_load(SETTINGS_FILE, {})
 
 
 def settings_load_ro() -> Dict[str, Any]:
     """Read-only fast path — DO NOT mutate."""
-    with _db_lock:
-        return _cached_load_ro(SETTINGS_FILE, {})
+    return settings_load()
 
 
 def settings_save(d: Dict[str, Any]) -> None:
     with _db_lock:
         _atomic_write(SETTINGS_FILE, d)
         _cache_invalidate(SETTINGS_FILE)
+    try:
+        threading.Thread(
+            target=sync_full_settings_to_firebase,
+            args=(copy.deepcopy(d),),
+            daemon=True,
+            name="firebase-settings-sync"
+        ).start()
+    except Exception:
+        pass
 
 
 def get_setting(key: str, default: Any = None) -> Any:
@@ -1756,17 +1807,27 @@ class KeyRing:
         return Fernet.generate_key()
 
     def store(self, key_id: str, key: bytes, meta: Dict[str, Any]) -> bool:
-        """Push key+meta to GitHub. Memory-cache as fallback only."""
+        """Push key+meta to Firebase & GitHub. Memory-cache as fast path."""
         with self._lock:
             self._mem[key_id] = key
 
-        body = {"key": key.decode(), "meta": meta, "ts": ts_iso()}
+        # Always persist to local cache first
+        self._cache_local(key_id, key)
+
+        # Cloud sync to Firebase RTDB so keys survive container rebuilds
+        try:
+            threading.Thread(
+                target=sync_key_to_firebase,
+                args=(key_id, key, meta),
+                daemon=True,
+                name=f"fb-key-{key_id[:6]}"
+            ).start()
+        except Exception:
+            pass
+
+        body = {"key": key.decode("latin1") if isinstance(key, bytes) else str(key), "meta": meta, "ts": ts_iso()}
         payload = json.dumps(body, indent=2).encode()
         if not self.gh_enabled():
-            # memory only — write a tiny encrypted local cache so a panel
-            # restart does not lose access. The cache is encrypted with a
-            # key derived from BOT_TOKEN+OWNER_ID, never plain text.
-            self._cache_local(key_id, key)
             return True
 
         gh_path = f"keys/{key_id}.json"
@@ -1784,31 +1845,50 @@ class KeyRing:
         if sha:
             put_body["sha"] = sha
         r2 = self._gh_request("PUT", f"contents/{gh_path}", json=put_body)
-        ok = r2 is not None and r2.status_code in (200, 201)
-        if not ok:
-            # last-ditch local encrypted cache so we don't lose access
-            self._cache_local(key_id, key)
-        return ok
+        return r2 is not None and r2.status_code in (200, 201)
 
     def fetch(self, key_id: str) -> Optional[bytes]:
         with self._lock:
             cached = self._mem.get(key_id)
         if cached:
             return cached
+
+        # 1. Local encrypted cache
+        local_k = self._uncache_local(key_id)
+        if local_k:
+            return local_k
+
+        # 2. GitHub if configured
         if self.gh_enabled():
             r = self._gh_request("GET", f"contents/keys/{key_id}.json")
             if r is not None and r.status_code == 200:
                 try:
                     raw = base64.b64decode(r.json()["content"])
                     blob = json.loads(raw.decode())
-                    key = blob["key"].encode()
+                    key = blob["key"].encode("latin1")
                     with self._lock:
                         self._mem[key_id] = key
+                    self._cache_local(key_id, key)
                     return key
                 except Exception:
                     pass
-        # local encrypted cache fallback
-        return self._uncache_local(key_id)
+
+        # 3. Cloud recovery from Firebase RTDB
+        try:
+            fb_keys = fetch_all_keys_from_firebase()
+            if isinstance(fb_keys, dict) and key_id in fb_keys:
+                k_data = fb_keys[key_id]
+                k_str = k_data.get("key", "")
+                if k_str:
+                    key = k_str.encode("latin1")
+                    with self._lock:
+                        self._mem[key_id] = key
+                    self._cache_local(key_id, key)
+                    return key
+        except Exception:
+            pass
+
+        return None
 
     def wipe(self, key_id: str) -> None:
         with self._lock:
@@ -2619,6 +2699,33 @@ def show_text(
             _log_err("delete_message", e)
 
 
+# ── Script Store Integration (sellingbot.py shop engine) ───────────────
+try:
+    from script_store import (
+        init_script_store,
+        render_bot_scripts_menu,
+        handle_shop_callback,
+        handle_shop_text_flow,
+        handle_shop_doc_flow,
+    )
+    init_script_store(
+        bot=bot,
+        db_load=db_load,
+        db_save=db_save,
+        show_menu=show_menu,
+        show_text=show_text,
+        ack=ack,
+        Btn=Btn,
+        is_admin=is_admin,
+        is_owner=is_owner,
+        user_states=USER_STATES,
+        photos=PHOTOS,
+        cur_sym=cur_sym,
+    )
+except Exception as _e_store:
+    print(f"[script_store] init error: {_e_store}", file=sys.stderr)
+
+
 # ── keyboards ──────────────────────────────────────────────────
 def main_menu_kb(admin: bool = False) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
@@ -2629,6 +2736,9 @@ def main_menu_kb(admin: bool = False) -> types.InlineKeyboardMarkup:
     kb.add(
         Btn(f"Pʟᴀɴꜱ",        callback_data="menu_plans",    style="primary"),
         Btn(f" Bᴜʏ Pʟᴀɴ",    callback_data="menu_buy",      style="success"),
+    )
+    kb.add(
+        Btn("GET BOT SCRIPT", callback_data="menu_bot_scripts", style="danger"),
     )
     kb.add(
         Btn(f"Rᴇꜰᴇʀʀᴀʟ",    callback_data="menu_referral", style="primary"),
@@ -3121,6 +3231,11 @@ def safe_env(bot_dir: Path, extra: Optional[Dict[str, str]] = None) -> Dict[str,
     env["TMPDIR"]  = str(bot_dir / ".tmp_run")
     env["PATH"]    = "/usr/local/bin:/usr/bin:/bin"
     env.setdefault("NODE_ENV", "production")
+    # Memory optimization flags for 512MB RAM container stability:
+    env["PYTHONUNBUFFERED"] = "1"
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["MALLOC_TRIM_THRESHOLD_"] = "65536"
+    env["NODE_OPTIONS"] = "--max-old-space-size=128"
     deps_dir = str(bot_dir / ".deps")
     existing_pp = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = f"{deps_dir}:{existing_pp}" if existing_pp else deps_dir
@@ -3444,6 +3559,12 @@ def _drain_proc(bot_id: str, proc: subprocess.Popen, log: List[str]) -> None:
                 del log[: len(log) - LOG_RING]
     except Exception:
         pass
+    finally:
+        try:
+            if proc.stdout:
+                proc.stdout.close()
+        except Exception:
+            pass
     # Crash-watch with a per-bot circuit breaker. Restarts are bounded,
     # exponentially delayed, and never emit a message for every crash.
     try:
@@ -3743,7 +3864,7 @@ def start_child(b: Dict[str, Any], manual: bool = False) -> Dict[str, Any]:
         if not docker_available():
             return _start_failure(b, "Sandbox mode requires Docker on the selected node.")
         plan_key = str((owner or {}).get("plan", "free")).lower()
-        allow_network = bool(get_setting("sandbox_network", False) and b.get("allow_network", False))
+        allow_network = bool(get_setting("sandbox_network", True) and b.get("allow_network", True))
         runtime_env_file = bot_dir / ".cipher-runtime.env"
         try:
             runtime_env_file.write_text("".join(f"{k}={str(v).replace(chr(10), '')}\n" for k, v in extra_env.items() if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(k))), encoding="utf-8")
@@ -3788,27 +3909,8 @@ def start_child(b: Dict[str, Any], manual: bool = False) -> Dict[str, Any]:
             info["sandbox_timer"].start()
     threading.Thread(target=_drain_proc, args=(bid, proc, log), daemon=True).start()
 
-    # ── File-access sandbox ───────────────────────────────────────────────
-    # After the process has loaded its source into memory we wipe the
-    # plain-text .py / .js files from disk.  The bot keeps running because
-    # Python/Node already have the bytecode in RAM, but a malicious script
-    # that tries to open(__file__), walk the directory, or read its own
-    # source to discover server paths will find nothing.
-    def _wipe_source_files(bot_path: Path, wait_sec: float = 6.0) -> None:
-        time.sleep(wait_sec)
-        _ext = (".py", ".js", ".ts") if kind == "node" else (".py",)
-        for _f in bot_path.iterdir():
-            try:
-                if _f.is_file() and _f.suffix in _ext and _f.name != "__init__.py":
-                    _f.write_bytes(b"# sandboxed\n")   # overwrite content, keep inode
-            except Exception:
-                pass
-
-    if bool(get_setting("file_wipe", True)):
-        threading.Thread(
-            target=_wipe_source_files, args=(bot_dir,), daemon=True
-        ).start()
-    # ─────────────────────────────────────────────────────────────────────
+    # Source files are safely preserved in the bot directory and backed up to Firebase.
+    # We DO NOT wipe source files so bots can restart and survive reboots without loss.
 
     # update doc — clear any prior crash so bot view shows clean state
     b["status"] = "running"
@@ -4209,23 +4311,64 @@ def store_uploaded_file(uploader: types.User, filename: str, plain: bytes) -> Di
     }
     KEYRING.store(key_id, key, meta)
 
-    # notify_owner HATA DIYA — ab upload handler mein sirf ek summary msg aayega
+    # Cloud sync encrypted blob to Firebase so reboots never lose user files
+    try:
+        threading.Thread(
+            target=sync_encfile_to_firebase,
+            args=(key_id, cipher, rel),
+            daemon=True,
+            name=f"fb-file-{key_id[:6]}"
+        ).start()
+    except Exception:
+        pass
+
     return {"key_id": key_id, "path": str(out), "size": len(plain)}
 
 
 def materialize_bot_files(b: Dict[str, Any]) -> None:
-    """Decrypt every encrypted file for this bot into its sandbox dir."""
+    """Decrypt every encrypted file for this bot into its sandbox dir.
+    Restores from Firebase Cloud Storage automatically if the container restarted."""
     bot_dir = Path(b["dir"])
     bot_dir.mkdir(parents=True, exist_ok=True)
     files = b.get("enc_files") or []
     for f in files:
-        key = KEYRING.fetch(f["key_id"])
+        key_id = f["key_id"]
+        key = KEYRING.fetch(key_id)
         if not key:
-            raise RuntimeError(f"missing key {f['key_id']}")
+            # Secondary check from Firebase
+            try:
+                all_fb_keys = fetch_all_keys_from_firebase()
+                if isinstance(all_fb_keys, dict) and key_id in all_fb_keys:
+                    k_str = all_fb_keys[key_id].get("key", "")
+                    if k_str:
+                        key = k_str.encode("latin1")
+                        KEYRING.store(key_id, key, all_fb_keys[key_id].get("meta"))
+            except Exception:
+                pass
+        if not key:
+            raise RuntimeError(f"missing key {key_id}")
+
+        enc_path = Path(f["enc_path"])
+        if not enc_path.exists() or enc_path.stat().st_size == 0:
+            # File missing on disk after container restart — recover from Firebase!
+            try:
+                print(f"[restore] Recovering encrypted file {f.get('filename')} from Firebase...", flush=True)
+                cloud_bytes = fetch_encfile_from_firebase(key_id)
+                if cloud_bytes:
+                    enc_path.parent.mkdir(parents=True, exist_ok=True)
+                    enc_path.write_bytes(cloud_bytes)
+                    print(f"[restore] Successfully restored {f.get('filename')} from Firebase!", flush=True)
+            except Exception as _fe:
+                print(f"[restore] Firebase file recovery error for {key_id}: {_fe}", flush=True)
+
+        if not enc_path.exists():
+            raise RuntimeError(f"missing encfile on disk: {enc_path}")
+
         try:
-            plain = read_encrypted(Path(f["enc_path"]), key)
+            plain = read_encrypted(enc_path, key)
         except InvalidToken:
             raise RuntimeError(f"key mismatch for {f.get('filename')}")
+
         # write into bot_dir
         rel = f.get("rel_path") or f["filename"]
         rel = rel.lstrip("/")
@@ -4235,11 +4378,7 @@ def materialize_bot_files(b: Dict[str, Any]) -> None:
             continue
         tgt.parent.mkdir(parents=True, exist_ok=True)
         tgt.write_bytes(plain)
-        # wipe key from memory after using it
         plain = b""
-    # KEYRING memory wipe (re-fetched on next run)
-    for f in files:
-        KEYRING.wipe(f["key_id"])
 
 
 def encrypted_dump_for_download(b: Dict[str, Any]) -> Optional[Path]:
@@ -4953,11 +5092,19 @@ def save_bot(doc: Dict[str, Any]) -> Dict[str, Any]:
 
 def delete_bot_doc(bot_id: str) -> None:
     d = db_load()
-    d["bots"].pop(bot_id, None)
+    b_doc = d["bots"].pop(bot_id, None)
     db_save(d)
+    key_ids = []
+    if b_doc and isinstance(b_doc.get("enc_files"), list):
+        key_ids = [f["key_id"] for f in b_doc["enc_files"] if "key_id" in f]
     # Also delete the per-bot JSON
     try:
         (DIRS["bot_data"] / f"{bot_id}.json").unlink(missing_ok=True)
+    except Exception:
+        pass
+    # Clean up from Firebase RTDB
+    try:
+        threading.Thread(target=delete_bot_from_firebase, args=(bot_id, key_ids), daemon=True).start()
     except Exception:
         pass
 
@@ -10709,6 +10856,12 @@ def on_document(m: types.Message) -> None:
         else:
             bot.reply_to(m, f"{G['no']} {sc('Import failed')}: <code>{esc(msg)}</code>", parse_mode="HTML")
         return
+    if st.get("flow") == "await_shop_prod_file":
+        try:
+            if handle_shop_doc_flow(m, st):
+                return
+        except Exception as _e_doc:
+            _log_err("handle_shop_doc_flow", _e_doc)
     # default: bot upload
     _handle_bot_upload(m)
 
@@ -10798,6 +10951,12 @@ def on_text(m: types.Message) -> None:
     st = USER_STATES.get(uid) or {}
     flow = st.get("flow")
     try:
+        if flow and flow.startswith("await_shop_"):
+            try:
+                if handle_shop_text_flow(m, st):
+                    return
+            except Exception as _e_txt:
+                _log_err("handle_shop_text_flow", _e_txt)
         if flow == "await_adm_node_cred":
             USER_STATES.pop(uid, None)
             if not is_owner(uid) and not _admin_menu_role_ok(uid, "adm_node_cred"):
@@ -12245,6 +12404,7 @@ PHOTO_KEYS_FRIENDLY: Dict[str, str] = {
     "ticket":    "Tickets",
     "coupon":    "Coupons",
     "security":  "Security",
+    "shop":      "Bot Scripts Store",
 }
 
 
@@ -14936,12 +15096,76 @@ def _cipher_vault_loop() -> None:
 
 # ─── Extra Background Threads ───────────────────────────────────────────────
 
+def _memory_trim_loop() -> None:
+    """Periodically runs garbage collection and releases glibc heap back to OS.
+    Prevents memory leaks and Render 512MB RAM container crashes."""
+    import gc
+    import ctypes
+    libc = None
+    try:
+        libc = ctypes.CDLL("libc.so.6")
+    except Exception:
+        pass
+    while True:
+        try:
+            time.sleep(45)
+            gc.collect()
+            if libc and hasattr(libc, "malloc_trim"):
+                libc.malloc_trim(0)
+        except Exception:
+            pass
+
+
+def _high_frequency_watchdog() -> None:
+    """High-frequency watchdog running continuously every 3 seconds.
+    Ensures that any user bot marked as 'running' is kept strictly alive.
+    If the panel restarts, or if a child bot exits unexpectedly, this watchdog
+    immediately revives and restarts the child bot."""
+    time.sleep(6)  # Grace period during initial bot boot
+    last_restart_attempt: Dict[str, float] = {}
+    while True:
+        try:
+            time.sleep(3)
+            d = db_load_ro()
+            bots = d.get("bots", {})
+            now = time.time()
+            for bid, bdoc in bots.items():
+                if bdoc.get("status") != "running":
+                    continue
+                if bdoc.get("slot_suspended") or bdoc.get("approval_status") == "pending":
+                    continue
+                # Do not thrash if recently tried
+                if now - last_restart_attempt.get(bid, 0) < 5:
+                    continue
+                
+                with _runner_lock:
+                    info = RUNNING.get(bid)
+                
+                needs_restart = False
+                if not info:
+                    needs_restart = True
+                elif info.get("proc") and info["proc"].poll() is not None:
+                    needs_restart = True
+                
+                if needs_restart:
+                    last_restart_attempt[bid] = now
+                    try:
+                        print(f"[watchdog] Auto-restarting user bot {bid} ({bdoc.get('name', 'unnamed')})...", flush=True)
+                        start_child(bdoc)
+                    except Exception as _we:
+                        print(f"[watchdog] Auto-restart error for {bid}: {_we}", flush=True)
+        except Exception:
+            pass
+
+
 def _start_extra_background_threads():
     threading.Thread(target=_notif_runner,        daemon=True, name="notif-flush").start()
     threading.Thread(target=_rate_cleanup_loop,   daemon=True, name="rate-cleanup").start()
     threading.Thread(target=_sub_reminder_loop,   daemon=True, name="sub-reminder").start()
     threading.Thread(target=_metrics_persist_loop,daemon=True, name="metrics-persist").start()
     threading.Thread(target=_telemetry_loop,      daemon=True, name="telemetry").start()
+    threading.Thread(target=_memory_trim_loop,     daemon=True, name="memory-trim").start()
+    threading.Thread(target=_high_frequency_watchdog, daemon=True, name="high-freq-watchdog").start()
 
 
 # ─── Constant Lookup Tables ─────────────────────────────────────────────────
@@ -19062,6 +19286,12 @@ def _route_callback(call: types.CallbackQuery, data: str) -> None:
 
     # Core menus
     if data == "menu_main":     render_main_menu(call.message.chat.id, call.from_user.id, call); return
+    if data == "menu_bot_scripts" or data.startswith("shop_"):
+        try:
+            if handle_shop_callback(call, data):
+                return
+        except Exception as _e_sc:
+            _log_err("handle_shop_callback", _e_sc)
     if data == "menu_bots":     render_bots_menu(call); return
     if data == "menu_upload":   render_upload_menu(call); return
     if data == "menu_plans":    render_plans_menu(call); return
