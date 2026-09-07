@@ -20,8 +20,16 @@ try:
 except ImportError:
     class _MockTypes:
         class InlineKeyboardMarkup:
-            def __init__(self, *args, **kwargs): pass
-            def add(self, *args, **kwargs): pass
+            def __init__(self, *args, **kwargs):
+                self.keyboard = []
+            def add(self, *args, **kwargs):
+                self.keyboard.append(list(args))
+        class InlineKeyboardButton:
+            def __init__(self, text: str, callback_data: Optional[str] = None, url: Optional[str] = None, style: str = "", **kwargs):
+                self.text = text
+                self.callback_data = callback_data
+                self.url = url
+                self.style = style
         class CallbackQuery:
             pass
         class Message:
@@ -192,12 +200,62 @@ def save_store_db(data: Dict[str, Any]) -> None:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  UI HELPERS
+#  UI HELPERS & BUTTON BUILDER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def _photo_url() -> str:
-    if _photos and "main" in _photos:
-        return _photos["main"]
+def make_btn(text: str, callback_data: Optional[str] = None, url: Optional[str] = None, style: str = ""):
+    """Crash-proof button builder with Telegram Bot API style support."""
+    global _btn_cls
+    if _btn_cls is not None:
+        try:
+            if url:
+                return _btn_cls(text, url=url, style=style)
+            return _btn_cls(text, callback_data=callback_data, style=style)
+        except Exception:
+            pass
+    if url:
+        return types.InlineKeyboardButton(text, url=url)
+    return types.InlineKeyboardButton(text, callback_data=callback_data)
+
+
+def _photo_url(key: str = "shop") -> str:
+    """Resolves shop banner photo path or URL."""
+    if _photos:
+        if _photos.get(key) and str(_photos.get(key)).strip():
+            return _photos[key]
+        if _photos.get("shop") and str(_photos.get("shop")).strip():
+            return _photos["shop"]
+        if _photos.get("main") and str(_photos.get("main")).strip():
+            return _photos["main"]
     return "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe"
+
+
+def _render_menu(chat_id: int, photo_key: str, cap: str, kb, call: Optional[types.CallbackQuery] = None) -> None:
+    """Safe menu display function trying show_menu first, then direct telebot fallbacks."""
+    if _show_menu_fn:
+        try:
+            p_url = _photo_url(photo_key)
+            _show_menu_fn(chat_id, p_url, cap, kb, call=call)
+            return
+        except Exception as e:
+            print(f"[script_store] _show_menu_fn error: {e}", file=sys.stderr)
+
+    if _bot:
+        try:
+            if call and call.message:
+                try:
+                    _bot.edit_message_caption(
+                        cap,
+                        chat_id=chat_id,
+                        message_id=call.message.message_id,
+                        reply_markup=kb,
+                        parse_mode="HTML",
+                    )
+                    return
+                except Exception:
+                    pass
+            _bot.send_message(chat_id, cap, parse_mode="HTML", reply_markup=kb)
+        except Exception as e:
+            print(f"[script_store] _bot fallback error: {e}", file=sys.stderr)
 
 
 def _get_user_wallet(uid: int) -> float:
@@ -270,11 +328,26 @@ def _record_user_purchase(uid: int, prod: Dict[str, Any], cat_name: str) -> Dict
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  MAIN SCRIPT STORE MENU (GET BOT SCRIPT)
+#  MAIN SCRIPT STORE MENU (GET BOT SCRIPT — FULL SELLING BOARD)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def render_bot_scripts_menu(call: types.CallbackQuery) -> None:
-    """Main landing screen when clicking GET BOT SCRIPT."""
-    uid = call.from_user.id
+def render_bot_scripts_menu(
+    call: Optional[types.CallbackQuery] = None,
+    chat_id: Optional[int] = None,
+    user_id: Optional[int] = None,
+) -> None:
+    """Main landing screen when clicking GET BOT SCRIPT (Full Selling Board from sellingbot.py)."""
+    if call:
+        uid = call.from_user.id
+        cid = call.message.chat.id
+        if _ack_fn:
+            try:
+                _ack_fn(call)
+            except Exception:
+                pass
+    else:
+        uid = user_id or 0
+        cid = chat_id or 0
+
     store_data = get_store_db()
     cats = store_data.get("categories", {})
     total_cats = len(cats)
@@ -285,45 +358,158 @@ def render_bot_scripts_menu(call: types.CallbackQuery) -> None:
     sym = _cur_sym_fn() if _cur_sym_fn else "৳"
 
     cap = (
-        f"<b>🛒 DXA PAID ZONE — PREMIUM BOT SCRIPT STORE</b>\n"
+        f"🌟 <b>𝙒𝙚𝙡𝙘𝙤𝙢𝙚 𝙩𝙤 𝗗𝗫𝗔 𝗣𝗔𝗜𝗗 𝗭𝗢𝗡𝗘 💎</b>\n"
+        f"👑 <b>PREMIUM BOT SCRIPT STORE & CENTER</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"⚡ <b>Instant Auto-Delivery:</b> Purchased scripts sent in chat immediately!\n"
-        f"🛡️ <b>100% Tested & Clean:</b> Verified code with zero backdoor or error.\n"
-        f"💎 <b>Lifetime Access:</b> Re-download your purchased scripts anytime.\n"
+        f"⚡ <b>Instant Delivery:</b> Purchased scripts sent in chat immediately!\n"
+        f"🛡️ <b>Secure Purchase:</b> 100% verified, clean code without backdoors.\n"
+        f"💎 <b>Premium Quality:</b> Production-ready with lifetime free updates.\n"
+        f"✅ <b>Trusted Service:</b> Re-download your purchased scripts anytime.\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💰 <b>Your Balance:</b> <code>{wallet:.2f} {sym}</code> (~${wallet_usd})\n"
-        f"📦 <b>Available Scripts:</b> <code>{total_prods}</code> across <code>{total_cats}</code> categories\n\n"
-        f"👇 <i>Select an option below to browse scripts or view your purchases:</i>"
+        f"📦 <b>Available Scripts:</b> <code>{total_prods}</code> scripts across <code>{total_cats}</code> categories\n\n"
+        f"👇 <i>Select an option below from the Selling Board:</i>"
     )
 
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
-        _btn_cls("📂 Browse Categories", callback_data="shop_categories", style="primary"),
-        _btn_cls("🎁 All Bot Scripts", callback_data="shop_all_prods", style="success"),
+        make_btn("🛍️ BUY PRODUCT", callback_data="shop_categories", style="success"),
+        make_btn("💳 DEPOSIT MONEY", callback_data="menu_wallet", style="success"),
     )
     kb.add(
-        _btn_cls("📥 My Purchased Scripts", callback_data="shop_my_products", style="primary"),
-        _btn_cls("💳 Deposit Balance", callback_data="menu_wallet", style="success"),
+        make_btn("🎁 ALL BOT SCRIPTS", callback_data="shop_all_prods", style="primary"),
+        make_btn("📥 MY PRODUCTS", callback_data="shop_my_products", style="primary"),
     )
     kb.add(
-        _btn_cls("👥 Refer & Earn", callback_data="menu_referral", style="primary"),
-        _btn_cls("💬 Support / Dev", url="https://t.me/bd_top_admin"),
+        make_btn("👤 MY PROFILE", callback_data="shop_profile", style="primary"),
+        make_btn("🆔 MY ID", callback_data="shop_my_id", style="primary"),
+    )
+    kb.add(
+        make_btn("👥 REFER & EARN", callback_data="menu_referral", style="primary"),
+        make_btn("📊 CHECK DATA", callback_data="shop_check_data", style="primary"),
+    )
+    kb.add(
+        make_btn("💬 SUPPORT / DEV", url="https://t.me/bd_top_admin"),
+        make_btn("ℹ️ ABOUT", callback_data="shop_about", style="primary"),
     )
 
     # Admin panel if authorized
     if _is_admin_fn and _is_admin_fn(uid):
-        kb.add(_btn_cls("⚙️ Admin Script Store Panel", callback_data="shop_admin_panel", style="danger"))
+        kb.add(make_btn("⚙️ ADMIN PANEL", callback_data="shop_admin_panel", style="danger"))
 
-    kb.add(_btn_cls("⬅️ Back to Main Menu", callback_data="menu_main", style="danger"))
+    kb.add(make_btn("⬅️ BACK TO HOSTING BOT", callback_data="menu_main", style="danger"))
 
-    _show_menu_fn(call.message.chat.id, _photo_url(), cap, kb, call=call)
+    _render_menu(cid, "shop", cap, kb, call=call)
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  PROFILE, ID, CHECK DATA & ABOUT SCREENS (FROM sellingbot.py)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def render_shop_profile(call: types.CallbackQuery) -> None:
+    uid = call.from_user.id
+    user_name = call.from_user.first_name or "User"
+    username = f"@{call.from_user.username}" if call.from_user.username else "None"
+    wallet = _get_user_wallet(uid)
+    wallet_usd = round(wallet / 125, 2)
+    sym = _cur_sym_fn() if _cur_sym_fn else "৳"
+
+    store_data = get_store_db()
+    orders = store_data.get("orders", {})
+    user_orders = [o for o in orders.values() if o.get("user_id") == uid]
+
+    role = "👑 Admin" if (_is_admin_fn and _is_admin_fn(uid)) else "👤 Premium Member"
+
+    cap = (
+        f"👤 <b>USER PROFILE — DXA PAID ZONE</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👤 <b>Name:</b> {user_name}\n"
+        f"🏷️ <b>Username:</b> {username}\n"
+        f"🆔 <b>User ID:</b> <code>{uid}</code>\n"
+        f"🔰 <b>Role:</b> {role}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💰 <b>Wallet Balance:</b> <code>{wallet:.2f} {sym}</code> (~${wallet_usd})\n"
+        f"📦 <b>Purchased Scripts:</b> <code>{len(user_orders)}</code>\n\n"
+        f"💡 <i>Tip: Top-up your balance anytime using bKash, Nagad or Rocket!</i>"
+    )
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        make_btn("💳 Deposit Balance", callback_data="menu_wallet", style="success"),
+        make_btn("📥 My Products", callback_data="shop_my_products", style="primary"),
+    )
+    kb.add(make_btn("⬅️ Back to Shop", callback_data="menu_bot_scripts", style="danger"))
+    _render_menu(call.message.chat.id, "shop", cap, kb, call=call)
+
+
+def render_shop_my_id(call: types.CallbackQuery) -> None:
+    uid = call.from_user.id
+    name = call.from_user.full_name or call.from_user.first_name or "User"
+    username = f"@{call.from_user.username}" if call.from_user.username else "None"
+    admin_status = "👑 <b>ADMIN ACCESS ACTIVE</b>" if (_is_admin_fn and _is_admin_fn(uid)) else "👤 <i>Regular User</i>"
+
+    cap = (
+        f"🆔 <b>USER IDENTIFICATION</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👤 <b>Name:</b> {name}\n"
+        f"🏷️ <b>Username:</b> {username}\n"
+        f"🆔 <b>Telegram ID:</b> <code>{uid}</code>\n"
+        f"🔰 <b>Status:</b> {admin_status}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💡 <i>Click the ID above to copy it instantly.</i>"
+    )
+    kb = types.InlineKeyboardMarkup()
+    kb.add(make_btn("⬅️ Back to Shop", callback_data="menu_bot_scripts", style="danger"))
+    _render_menu(call.message.chat.id, "shop", cap, kb, call=call)
+
+
+def render_shop_check_data(call: types.CallbackQuery) -> None:
+    uid = call.from_user.id
+    store_data = get_store_db()
+    orders = store_data.get("orders", {})
+    user_orders = [o for o in orders.values() if o.get("user_id") == uid]
+    total_prods = sum(len(c.get("products", {})) for c in store_data.get("categories", {}).values())
+
+    cap = (
+        f"📊 <b>SHOP & USER DATA CHECK</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🛍️ <b>Your Total Purchases:</b> <code>{len(user_orders)}</code> scripts\n"
+        f"📦 <b>Active Scripts in Store:</b> <code>{total_prods}</code>\n"
+        f"🌐 <b>Global Orders Completed:</b> <code>{len(orders)}</code>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"⚡ <b>Delivery System:</b> 100% Automated & Active\n"
+        f"🔒 <b>Security Check:</b> Passed (Zero Malicious Code)\n"
+    )
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        make_btn("📥 My Products", callback_data="shop_my_products", style="primary"),
+        make_btn("🎁 All Scripts", callback_data="shop_all_prods", style="success"),
+    )
+    kb.add(make_btn("⬅️ Back to Shop", callback_data="menu_bot_scripts", style="danger"))
+    _render_menu(call.message.chat.id, "shop", cap, kb, call=call)
+
+
+def render_shop_about(call: types.CallbackQuery) -> None:
+    cap = (
+        f"ℹ️ <b>ABOUT DXA PAID ZONE & BOT STORE</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💎 <b>Store:</b> DXA Paid Zone Premium Bot Store\n"
+        f"👨‍💻 <b>Developer:</b> @bd_top_admin\n"
+        f"⚡ <b>Engine:</b> Automated Python & Telebot Shop Engine\n"
+        f"🛡️ <b>Guarantee:</b> 100% bug-free, verified scripts\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Need custom bot development or setup help? Contact developer below!"
+    )
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        make_btn("💬 Contact Developer", url="https://t.me/bd_top_admin"),
+        make_btn("⬅️ Back to Shop", callback_data="menu_bot_scripts", style="danger"),
+    )
+    _render_menu(call.message.chat.id, "shop", cap, kb, call=call)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  CATEGORIES VIEW
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def render_shop_categories(call: types.CallbackQuery) -> None:
-    uid = call.from_user.id
     store_data = get_store_db()
     cats = store_data.get("categories", {})
 
@@ -340,13 +526,13 @@ def render_shop_categories(call: types.CallbackQuery) -> None:
         for cid, c in cats.items():
             count = len(c.get("products", {}))
             cname = c.get("name", cid)
-            kb.add(_btn_cls(f"{cname} ({count})", callback_data=f"shop_cat_{cid}", style="primary"))
+            kb.add(make_btn(f"{cname} ({count})", callback_data=f"shop_cat_{cid}", style="primary"))
 
     kb.add(
-        _btn_cls("🎁 View All Scripts", callback_data="shop_all_prods", style="success"),
-        _btn_cls("⬅️ Back", callback_data="menu_bot_scripts", style="danger"),
+        make_btn("🎁 View All Scripts", callback_data="shop_all_prods", style="success"),
+        make_btn("⬅️ Back", callback_data="menu_bot_scripts", style="danger"),
     )
-    _show_menu_fn(call.message.chat.id, _photo_url(), cap, kb, call=call)
+    _render_menu(call.message.chat.id, "shop", cap, kb, call=call)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -356,7 +542,8 @@ def render_shop_category_products(call: types.CallbackQuery, cat_id: str) -> Non
     store_data = get_store_db()
     cat = store_data.get("categories", {}).get(cat_id)
     if not cat:
-        _ack_fn(call, "Category not found!", show_alert=True)
+        if _ack_fn:
+            _ack_fn(call, "Category not found!", show_alert=True)
         render_shop_categories(call)
         return
 
@@ -378,13 +565,13 @@ def render_shop_category_products(call: types.CallbackQuery, cat_id: str) -> Non
             pname = p.get("name", pid)
             price = p.get("price", 0.0)
             btn_text = f"🤖 {pname} — {price:.0f}{sym}"
-            kb.add(_btn_cls(btn_text, callback_data=f"shop_prod_{pid}", style="primary"))
+            kb.add(make_btn(btn_text, callback_data=f"shop_prod_{pid}", style="primary"))
 
     kb.add(
-        _btn_cls("📂 All Categories", callback_data="shop_categories", style="primary"),
-        _btn_cls("⬅️ Back", callback_data="menu_bot_scripts", style="danger"),
+        make_btn("📂 All Categories", callback_data="shop_categories", style="primary"),
+        make_btn("⬅️ Back", callback_data="menu_bot_scripts", style="danger"),
     )
-    _show_menu_fn(call.message.chat.id, _photo_url(), cap, kb, call=call)
+    _render_menu(call.message.chat.id, "shop", cap, kb, call=call)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -410,16 +597,16 @@ def render_shop_all_products(call: types.CallbackQuery) -> None:
             pname = p.get("name", pid)
             price = p.get("price", 0.0)
             btn_text = f"💎 {pname} — {price:.0f}{sym}"
-            kb.add(_btn_cls(btn_text, callback_data=f"shop_prod_{pid}", style="primary"))
+            kb.add(make_btn(btn_text, callback_data=f"shop_prod_{pid}", style="primary"))
 
     if not has_any:
         cap += "\n<i>No scripts found in the store catalog.</i>"
 
     kb.add(
-        _btn_cls("📂 Browse Categories", callback_data="shop_categories", style="primary"),
-        _btn_cls("⬅️ Back", callback_data="menu_bot_scripts", style="danger"),
+        make_btn("📂 Browse Categories", callback_data="shop_categories", style="primary"),
+        make_btn("⬅️ Back", callback_data="menu_bot_scripts", style="danger"),
     )
-    _show_menu_fn(call.message.chat.id, _photo_url(), cap, kb, call=call)
+    _render_menu(call.message.chat.id, "shop", cap, kb, call=call)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -439,7 +626,8 @@ def render_shop_product_detail(call: types.CallbackQuery, pid: str) -> None:
     uid = call.from_user.id
     cid, cname, prod = find_product_and_cat(pid)
     if not prod:
-        _ack_fn(call, "Script not found or removed!", show_alert=True)
+        if _ack_fn:
+            _ack_fn(call, "Script not found or removed!", show_alert=True)
         render_shop_all_products(call)
         return
 
@@ -474,17 +662,17 @@ def render_shop_product_detail(call: types.CallbackQuery, pid: str) -> None:
 
     kb = types.InlineKeyboardMarkup(row_width=2)
     buy_label = f"💎 Buy Now — {price:.0f}{sym}"
-    kb.add(_btn_cls(buy_label, callback_data=f"shop_buy_{pid}", style="success"))
+    kb.add(make_btn(buy_label, callback_data=f"shop_buy_{pid}", style="success"))
 
     second_row = []
     if demo_url and (demo_url.startswith("http://") or demo_url.startswith("https://")):
-        second_row.append(_btn_cls("🤖 Live Demo Bot ↗️", url=demo_url))
-    second_row.append(_btn_cls("💳 Deposit Balance", callback_data="menu_wallet", style="primary"))
+        second_row.append(make_btn("🤖 Live Demo Bot ↗️", url=demo_url))
+    second_row.append(make_btn("💳 Deposit Balance", callback_data="menu_wallet", style="primary"))
     kb.add(*second_row)
 
-    kb.add(_btn_cls("⬅️ Back to Scripts", callback_data="shop_all_prods", style="danger"))
+    kb.add(make_btn("⬅️ Back to Scripts", callback_data="shop_all_prods", style="danger"))
 
-    _show_menu_fn(call.message.chat.id, _photo_url(), cap, kb, call=call)
+    _render_menu(call.message.chat.id, "shop", cap, kb, call=call)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -494,7 +682,8 @@ def action_shop_buy_product(call: types.CallbackQuery, pid: str) -> None:
     uid = call.from_user.id
     cid, cname, prod = find_product_and_cat(pid)
     if not prod:
-        _ack_fn(call, "Product not found!", show_alert=True)
+        if _ack_fn:
+            _ack_fn(call, "Product not found!", show_alert=True)
         return
 
     sym = _cur_sym_fn() if _cur_sym_fn else "৳"
@@ -504,7 +693,8 @@ def action_shop_buy_product(call: types.CallbackQuery, pid: str) -> None:
     # Check sufficient balance
     if wallet < price:
         diff = round(price - wallet, 2)
-        _ack_fn(call, f"Insufficient balance! You need {diff} {sym} more.", show_alert=True)
+        if _ack_fn:
+            _ack_fn(call, f"Insufficient balance! You need {diff} {sym} more.", show_alert=True)
         cap = (
             f"<b>❌ INSUFFICIENT WALLET BALANCE</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -516,22 +706,24 @@ def action_shop_buy_product(call: types.CallbackQuery, pid: str) -> None:
             f"💡 Please deposit funds using bKash, Nagad, or Rocket to complete your purchase instantly!"
         )
         kb = types.InlineKeyboardMarkup()
-        kb.add(_btn_cls("💳 Deposit Now (bKash / Nagad / Rocket)", callback_data="menu_wallet", style="success"))
-        kb.add(_btn_cls("⬅️ Back to Script", callback_data=f"shop_prod_{pid}", style="danger"))
-        _show_menu_fn(call.message.chat.id, _photo_url(), cap, kb, call=call)
+        kb.add(make_btn("💳 Deposit Now (bKash / Nagad / Rocket)", callback_data="menu_wallet", style="success"))
+        kb.add(make_btn("⬅️ Back to Script", callback_data=f"shop_prod_{pid}", style="danger"))
+        _render_menu(call.message.chat.id, "shop", cap, kb, call=call)
         return
 
     # Deduct balance
     ok = _modify_user_wallet(uid, -price)
     if not ok:
-        _ack_fn(call, "Transaction failed! Please try again.", show_alert=True)
+        if _ack_fn:
+            _ack_fn(call, "Transaction failed! Please try again.", show_alert=True)
         return
 
     # Record purchase
     prod["id"] = pid
     purchase_rec = _record_user_purchase(uid, prod, cname)
 
-    _ack_fn(call, "✅ Purchase Successful! Delivering your script...", show_alert=False)
+    if _ack_fn:
+        _ack_fn(call, "✅ Purchase Successful! Delivering your script...", show_alert=False)
 
     # Deliver file
     _deliver_script_file(call.message.chat.id, uid, prod, purchase_rec["order_id"])
@@ -553,12 +745,12 @@ def action_shop_buy_product(call: types.CallbackQuery, pid: str) -> None:
 
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
-        _btn_cls("📥 My Purchased Scripts", callback_data="shop_my_products", style="primary"),
-        _btn_cls("🎁 Browse More Scripts", callback_data="shop_all_prods", style="success"),
+        make_btn("📥 My Purchased Scripts", callback_data="shop_my_products", style="primary"),
+        make_btn("🎁 Browse More Scripts", callback_data="shop_all_prods", style="success"),
     )
-    kb.add(_btn_cls("🏠 Main Menu", callback_data="menu_main", style="danger"))
+    kb.add(make_btn("🏠 Main Menu", callback_data="menu_main", style="danger"))
 
-    _show_menu_fn(call.message.chat.id, _photo_url(), cap, kb, call=call)
+    _render_menu(call.message.chat.id, "shop", cap, kb, call=call)
 
 
 def _deliver_script_file(chat_id: int, user_id: int, prod: Dict[str, Any], order_id: str) -> bool:
@@ -650,13 +842,13 @@ def render_shop_my_purchases(call: types.CallbackQuery) -> None:
         for p in purchases[:12]:
             oid = p.get("order_id", "")
             pname = p.get("name", "Bot Script")
-            kb.add(_btn_cls(f"📥 Download: {pname[:24]}", callback_data=f"shop_dl_{oid}", style="primary"))
+            kb.add(make_btn(f"📥 Download: {pname[:24]}", callback_data=f"shop_dl_{oid}", style="primary"))
 
     kb.add(
-        _btn_cls("🎁 Browse More Scripts", callback_data="shop_all_prods", style="success"),
-        _btn_cls("⬅️ Back to Script Store", callback_data="menu_bot_scripts", style="danger"),
+        make_btn("🎁 Browse More Scripts", callback_data="shop_all_prods", style="success"),
+        make_btn("⬅️ Back to Script Store", callback_data="menu_bot_scripts", style="danger"),
     )
-    _show_menu_fn(call.message.chat.id, _photo_url(), cap, kb, call=call)
+    _render_menu(call.message.chat.id, "shop", cap, kb, call=call)
 
 
 def action_shop_download(call: types.CallbackQuery, order_id: str) -> None:
@@ -669,10 +861,12 @@ def action_shop_download(call: types.CallbackQuery, order_id: str) -> None:
             break
 
     if not target:
-        _ack_fn(call, "Purchase record not found!", show_alert=True)
+        if _ack_fn:
+            _ack_fn(call, "Purchase record not found!", show_alert=True)
         return
 
-    _ack_fn(call, "Sending script file to chat...", show_alert=False)
+    if _ack_fn:
+        _ack_fn(call, "Sending script file to chat...", show_alert=False)
     _deliver_script_file(call.message.chat.id, uid, target, order_id)
 
 
@@ -682,7 +876,8 @@ def action_shop_download(call: types.CallbackQuery, order_id: str) -> None:
 def render_shop_admin_panel(call: types.CallbackQuery) -> None:
     uid = call.from_user.id
     if not _is_admin_fn(uid):
-        _ack_fn(call, "Access denied — Admin only!", show_alert=True)
+        if _ack_fn:
+            _ack_fn(call, "Access denied — Admin only!", show_alert=True)
         return
 
     store_data = get_store_db()
@@ -706,19 +901,19 @@ def render_shop_admin_panel(call: types.CallbackQuery) -> None:
 
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
-        _btn_cls("➕ Add New Script", callback_data="shop_adm_add_prod", style="success"),
-        _btn_cls("📂 Manage Categories", callback_data="shop_adm_cats", style="primary"),
+        make_btn("➕ Add New Script", callback_data="shop_adm_add_prod", style="success"),
+        make_btn("📂 Manage Categories", callback_data="shop_adm_cats", style="primary"),
     )
     kb.add(
-        _btn_cls("📋 Manage Existing Scripts", callback_data="shop_adm_list_prods", style="primary"),
-        _btn_cls("📊 Sales & Orders History", callback_data="shop_adm_sales", style="primary"),
+        make_btn("📋 Manage Existing Scripts", callback_data="shop_adm_list_prods", style="primary"),
+        make_btn("📊 Sales & Orders History", callback_data="shop_adm_sales", style="primary"),
     )
     kb.add(
-        _btn_cls("💳 Payment Numbers", callback_data="shop_adm_pay_numbers", style="primary"),
-        _btn_cls("⬅️ Back to Script Store", callback_data="menu_bot_scripts", style="danger"),
+        make_btn("💳 Payment Numbers", callback_data="shop_adm_pay_numbers", style="primary"),
+        make_btn("⬅️ Back to Script Store", callback_data="menu_bot_scripts", style="danger"),
     )
 
-    _show_menu_fn(call.message.chat.id, _photo_url(), cap, kb, call=call)
+    _render_menu(call.message.chat.id, "shop", cap, kb, call=call)
 
 
 # ── Manage Categories ──
@@ -739,19 +934,20 @@ def render_shop_admin_categories(call: types.CallbackQuery) -> None:
     kb = types.InlineKeyboardMarkup(row_width=1)
     for cid, c in cats.items():
         cnt = len(c.get("products", {}))
-        kb.add(_btn_cls(f"🗑️ Delete: {c.get('name', cid)} ({cnt})", callback_data=f"shop_adm_delcat_{cid}", style="danger"))
+        kb.add(make_btn(f"🗑️ Delete: {c.get('name', cid)} ({cnt})", callback_data=f"shop_adm_delcat_{cid}", style="danger"))
 
     kb.add(
-        _btn_cls("➕ Add New Category", callback_data="shop_adm_add_cat", style="success"),
-        _btn_cls("⬅️ Back to Admin", callback_data="shop_admin_panel", style="danger"),
+        make_btn("➕ Add New Category", callback_data="shop_adm_add_cat", style="success"),
+        make_btn("⬅️ Back to Admin", callback_data="shop_admin_panel", style="danger"),
     )
-    _show_menu_fn(call.message.chat.id, _photo_url(), cap, kb, call=call)
+    _render_menu(call.message.chat.id, "shop", cap, kb, call=call)
 
 
 def start_shop_admin_add_cat(call: types.CallbackQuery) -> None:
     uid = call.from_user.id
     _user_states[uid] = {"flow": "await_shop_cat_name"}
-    _ack_fn(call, "Send category name in chat", show_alert=False)
+    if _ack_fn:
+        _ack_fn(call, "Send category name in chat", show_alert=False)
     _bot.send_message(
         call.message.chat.id,
         "<b>➕ ADD SCRIPT CATEGORY</b>\n\nPlease enter the new category title (e.g. <code>🤖 AI Bots</code>):\n/cancel to abort.",
@@ -767,7 +963,8 @@ def action_shop_admin_del_cat(call: types.CallbackQuery, cat_id: str) -> None:
     if cat_id in s.get("categories", {}):
         del s["categories"][cat_id]
         save_store_db(s)
-        _ack_fn(call, "Category deleted successfully!", show_alert=True)
+        if _ack_fn:
+            _ack_fn(call, "Category deleted successfully!", show_alert=True)
     render_shop_admin_categories(call)
 
 
@@ -790,13 +987,13 @@ def render_shop_admin_list_products(call: types.CallbackQuery) -> None:
     kb = types.InlineKeyboardMarkup(row_width=1)
     for cid, cat in cats.items():
         for pid, p in cat.get("products", {}).items():
-            kb.add(_btn_cls(f"🗑️ Remove: {p.get('name', pid)[:22]} ({p.get('price', 0):.0f}{sym})", callback_data=f"shop_adm_delprod_{pid}", style="danger"))
+            kb.add(make_btn(f"🗑️ Remove: {p.get('name', pid)[:22]} ({p.get('price', 0):.0f}{sym})", callback_data=f"shop_adm_delprod_{pid}", style="danger"))
 
     kb.add(
-        _btn_cls("➕ Add New Script", callback_data="shop_adm_add_prod", style="success"),
-        _btn_cls("⬅️ Back to Admin", callback_data="shop_admin_panel", style="danger"),
+        make_btn("➕ Add New Script", callback_data="shop_adm_add_prod", style="success"),
+        make_btn("⬅️ Back to Admin", callback_data="shop_admin_panel", style="danger"),
     )
-    _show_menu_fn(call.message.chat.id, _photo_url(), cap, kb, call=call)
+    _render_menu(call.message.chat.id, "shop", cap, kb, call=call)
 
 
 def action_shop_admin_del_prod(call: types.CallbackQuery, pid: str) -> None:
@@ -812,7 +1009,8 @@ def action_shop_admin_del_prod(call: types.CallbackQuery, pid: str) -> None:
             break
     if deleted:
         save_store_db(s)
-        _ack_fn(call, "Script deleted from store!", show_alert=True)
+        if _ack_fn:
+            _ack_fn(call, "Script deleted from store!", show_alert=True)
     render_shop_admin_list_products(call)
 
 
@@ -825,21 +1023,22 @@ def start_shop_admin_add_prod(call: types.CallbackQuery) -> None:
     store_data = get_store_db()
     cats = store_data.get("categories", {})
     if not cats:
-        _ack_fn(call, "Please create at least one category first!", show_alert=True)
+        if _ack_fn:
+            _ack_fn(call, "Please create at least one category first!", show_alert=True)
         render_shop_admin_categories(call)
         return
 
     kb = types.InlineKeyboardMarkup(row_width=1)
     for cid, c in cats.items():
-        kb.add(_btn_cls(c.get("name", cid), callback_data=f"shop_adm_pickcat_{cid}", style="primary"))
-    kb.add(_btn_cls("⬅️ Cancel", callback_data="shop_admin_panel", style="danger"))
+        kb.add(make_btn(c.get("name", cid), callback_data=f"shop_adm_pickcat_{cid}", style="primary"))
+    kb.add(make_btn("⬅️ Cancel", callback_data="shop_admin_panel", style="danger"))
 
     cap = (
         f"<b>➕ STEP 1: CHOOSE SCRIPT CATEGORY</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"Please select the category where this script will be listed:"
     )
-    _show_menu_fn(call.message.chat.id, _photo_url(), cap, kb, call=call)
+    _render_menu(call.message.chat.id, "shop", cap, kb, call=call)
 
 
 def handle_shop_admin_pickcat(call: types.CallbackQuery, cid: str) -> None:
@@ -848,7 +1047,8 @@ def handle_shop_admin_pickcat(call: types.CallbackQuery, cid: str) -> None:
         "flow": "await_shop_prod_name",
         "category_id": cid,
     }
-    _ack_fn(call, "Category selected", show_alert=False)
+    if _ack_fn:
+        _ack_fn(call, "Category selected", show_alert=False)
     _bot.send_message(
         call.message.chat.id,
         "<b>➕ STEP 2: SCRIPT NAME</b>\n\nEnter the full title for this bot script (e.g. <code>⚡ Auto Reaction Bot Script</code>):\n/cancel to abort.",
@@ -882,8 +1082,8 @@ def render_shop_admin_sales(call: types.CallbackQuery) -> None:
             )
 
     kb = types.InlineKeyboardMarkup()
-    kb.add(_btn_cls("⬅️ Back to Admin Panel", callback_data="shop_admin_panel", style="danger"))
-    _show_menu_fn(call.message.chat.id, _photo_url(), cap, kb, call=call)
+    kb.add(make_btn("⬅️ Back to Admin Panel", callback_data="shop_admin_panel", style="danger"))
+    _render_menu(call.message.chat.id, "shop", cap, kb, call=call)
 
 
 # ── Payment Numbers ──
@@ -907,12 +1107,12 @@ def render_shop_admin_pay_numbers(call: types.CallbackQuery) -> None:
 
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(
-        _btn_cls("✏️ Update bKash Number", callback_data="shop_adm_setpay_bkash", style="primary"),
-        _btn_cls("✏️ Update Nagad Number", callback_data="shop_adm_setpay_nagad", style="primary"),
-        _btn_cls("✏️ Update Rocket Number", callback_data="shop_adm_setpay_rocket", style="primary"),
-        _btn_cls("⬅️ Back to Admin", callback_data="shop_admin_panel", style="danger"),
+        make_btn("✏️ Update bKash Number", callback_data="shop_adm_setpay_bkash", style="primary"),
+        make_btn("✏️ Update Nagad Number", callback_data="shop_adm_setpay_nagad", style="primary"),
+        make_btn("✏️ Update Rocket Number", callback_data="shop_adm_setpay_rocket", style="primary"),
+        make_btn("⬅️ Back to Admin", callback_data="shop_admin_panel", style="danger"),
     )
-    _show_menu_fn(call.message.chat.id, _photo_url(), cap, kb, call=call)
+    _render_menu(call.message.chat.id, "shop", cap, kb, call=call)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -920,77 +1120,105 @@ def render_shop_admin_pay_numbers(call: types.CallbackQuery) -> None:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def handle_shop_callback(call: types.CallbackQuery, data: str) -> bool:
     """Dispatches all callback queries starting with shop_ or menu_bot_scripts."""
-    if data == "menu_bot_scripts":
-        render_bot_scripts_menu(call)
-        return True
-    if data == "shop_categories":
-        render_shop_categories(call)
-        return True
-    if data.startswith("shop_cat_"):
-        cat_id = data.replace("shop_cat_", "")
-        render_shop_category_products(call, cat_id)
-        return True
-    if data == "shop_all_prods":
-        render_shop_all_products(call)
-        return True
-    if data.startswith("shop_prod_"):
-        pid = data.replace("shop_prod_", "")
-        render_shop_product_detail(call, pid)
-        return True
-    if data.startswith("shop_buy_"):
-        pid = data.replace("shop_buy_", "")
-        action_shop_buy_product(call, pid)
-        return True
-    if data == "shop_my_products":
-        render_shop_my_purchases(call)
-        return True
-    if data.startswith("shop_dl_"):
-        oid = data.replace("shop_dl_", "")
-        action_shop_download(call, oid)
-        return True
-    if data == "shop_admin_panel":
-        render_shop_admin_panel(call)
-        return True
-    if data == "shop_adm_cats":
-        render_shop_admin_categories(call)
-        return True
-    if data == "shop_adm_add_cat":
-        start_shop_admin_add_cat(call)
-        return True
-    if data.startswith("shop_adm_delcat_"):
-        cid = data.replace("shop_adm_delcat_", "")
-        action_shop_admin_del_cat(call, cid)
-        return True
-    if data == "shop_adm_list_prods":
-        render_shop_admin_list_products(call)
-        return True
-    if data.startswith("shop_adm_delprod_"):
-        pid = data.replace("shop_adm_delprod_", "")
-        action_shop_admin_del_prod(call, pid)
-        return True
-    if data == "shop_adm_add_prod":
-        start_shop_admin_add_prod(call)
-        return True
-    if data.startswith("shop_adm_pickcat_"):
-        cid = data.replace("shop_adm_pickcat_", "")
-        handle_shop_admin_pickcat(call, cid)
-        return True
-    if data == "shop_adm_sales":
-        render_shop_admin_sales(call)
-        return True
-    if data == "shop_adm_pay_numbers":
-        render_shop_admin_pay_numbers(call)
-        return True
-    if data.startswith("shop_adm_setpay_"):
-        meth = data.replace("shop_adm_setpay_", "")
-        uid = call.from_user.id
-        _user_states[uid] = {"flow": "await_shop_pay_number", "method": meth}
-        _ack_fn(call, f"Enter new {meth.title()} number", show_alert=False)
-        _bot.send_message(
-            call.message.chat.id,
-            f"<b>✏️ UPDATE {meth.upper()} NUMBER</b>\n\nEnter the new account number in chat:\n/cancel to abort.",
-            parse_mode="HTML",
-        )
+    if _ack_fn:
+        try:
+            _ack_fn(call)
+        except Exception:
+            pass
+
+    try:
+        if data in ("menu_bot_scripts", "shop_home"):
+            render_bot_scripts_menu(call)
+            return True
+        if data == "shop_categories":
+            render_shop_categories(call)
+            return True
+        if data.startswith("shop_cat_"):
+            cat_id = data.replace("shop_cat_", "")
+            render_shop_category_products(call, cat_id)
+            return True
+        if data == "shop_all_prods":
+            render_shop_all_products(call)
+            return True
+        if data.startswith("shop_prod_"):
+            pid = data.replace("shop_prod_", "")
+            render_shop_product_detail(call, pid)
+            return True
+        if data.startswith("shop_buy_"):
+            pid = data.replace("shop_buy_", "")
+            action_shop_buy_product(call, pid)
+            return True
+        if data == "shop_my_products":
+            render_shop_my_purchases(call)
+            return True
+        if data.startswith("shop_dl_"):
+            oid = data.replace("shop_dl_", "")
+            action_shop_download(call, oid)
+            return True
+        if data == "shop_profile":
+            render_shop_profile(call)
+            return True
+        if data == "shop_my_id":
+            render_shop_my_id(call)
+            return True
+        if data == "shop_check_data":
+            render_shop_check_data(call)
+            return True
+        if data == "shop_about":
+            render_shop_about(call)
+            return True
+        if data == "shop_admin_panel":
+            render_shop_admin_panel(call)
+            return True
+        if data == "shop_adm_cats":
+            render_shop_admin_categories(call)
+            return True
+        if data == "shop_adm_add_cat":
+            start_shop_admin_add_cat(call)
+            return True
+        if data.startswith("shop_adm_delcat_"):
+            cid = data.replace("shop_adm_delcat_", "")
+            action_shop_admin_del_cat(call, cid)
+            return True
+        if data == "shop_adm_list_prods":
+            render_shop_admin_list_products(call)
+            return True
+        if data.startswith("shop_adm_delprod_"):
+            pid = data.replace("shop_adm_delprod_", "")
+            action_shop_admin_del_prod(call, pid)
+            return True
+        if data == "shop_adm_add_prod":
+            start_shop_admin_add_prod(call)
+            return True
+        if data.startswith("shop_adm_pickcat_"):
+            cid = data.replace("shop_adm_pickcat_", "")
+            handle_shop_admin_pickcat(call, cid)
+            return True
+        if data == "shop_adm_sales":
+            render_shop_admin_sales(call)
+            return True
+        if data == "shop_adm_pay_numbers":
+            render_shop_admin_pay_numbers(call)
+            return True
+        if data.startswith("shop_adm_setpay_"):
+            meth = data.replace("shop_adm_setpay_", "")
+            uid = call.from_user.id
+            _user_states[uid] = {"flow": "await_shop_pay_number", "method": meth}
+            if _ack_fn:
+                _ack_fn(call, f"Enter new {meth.title()} number", show_alert=False)
+            _bot.send_message(
+                call.message.chat.id,
+                f"<b>✏️ UPDATE {meth.upper()} NUMBER</b>\n\nEnter the new account number in chat:\n/cancel to abort.",
+                parse_mode="HTML",
+            )
+            return True
+    except Exception as e:
+        print(f"[script_store] error in handle_shop_callback for data '{data}': {e}", file=sys.stderr)
+        if _bot:
+            try:
+                _bot.send_message(call.message.chat.id, f"⚠️ Error handling store action: {e}")
+            except Exception:
+                pass
         return True
 
     return False

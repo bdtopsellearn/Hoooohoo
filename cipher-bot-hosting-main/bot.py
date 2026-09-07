@@ -2708,22 +2708,8 @@ try:
         handle_shop_text_flow,
         handle_shop_doc_flow,
     )
-    init_script_store(
-        bot=bot,
-        db_load=db_load,
-        db_save=db_save,
-        show_menu=show_menu,
-        show_text=show_text,
-        ack=ack,
-        Btn=Btn,
-        is_admin=is_admin,
-        is_owner=is_owner,
-        user_states=USER_STATES,
-        photos=PHOTOS,
-        cur_sym=cur_sym,
-    )
 except Exception as _e_store:
-    print(f"[script_store] init error: {_e_store}", file=sys.stderr)
+    print(f"[script_store] import error: {_e_store}", file=sys.stderr)
 
 
 # ── keyboards ──────────────────────────────────────────────────
@@ -5330,6 +5316,27 @@ def ack(call: types.CallbackQuery, text: str = "") -> None:
         print(f"[ack] answer_callback_query failed: {e}", file=sys.stderr, flush=True)
 
 
+# ── Initialize Script Store Engine (sellingbot.py shop engine) ──────────
+try:
+    init_script_store(
+        bot=bot,
+        db_load=db_load,
+        db_save=db_save,
+        show_menu=show_menu,
+        show_text=show_text,
+        ack=ack,
+        Btn=Btn,
+        is_admin=is_admin,
+        is_owner=is_owner,
+        user_states=USER_STATES,
+        photos=PHOTOS,
+        cur_sym=cur_sym,
+    )
+    print("[script_store] Engine initialized successfully!", flush=True)
+except Exception as _e_store:
+    print(f"[script_store] init error: {_e_store}", file=sys.stderr, flush=True)
+
+
 # ── Animated progress-bar loading indicator ──────────────────────
 # Active per-message animations live here so we can stop them when the
 # real menu re-renders. Key: (chat_id, message_id) → threading.Event.
@@ -5809,6 +5816,21 @@ def cmd_menu(m: types.Message) -> None:
     if not require_verified(m.chat.id, m.from_user.id):
         return
     render_main_menu(m.chat.id, m.from_user.id)
+
+
+@bot.message_handler(commands=["shop", "store", "scripts", "script"])
+def cmd_shop(m: types.Message) -> None:
+    if not _is_private(m):
+        return
+    if banned_block(m):
+        return
+    get_or_create_user(m.from_user)
+    if not require_verified(m.chat.id, m.from_user.id):
+        return
+    try:
+        render_bot_scripts_menu(chat_id=m.chat.id, user_id=m.from_user.id)
+    except Exception as _e:
+        _log_err("cmd_shop", _e)
 
 
 @bot.message_handler(commands=["id"])
