@@ -32,7 +32,7 @@ from telegram.constants import ParseMode
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  CONFIG
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-BOT_TOKEN      = os.environ.get("BOT_TOKEN", "8853939075:AAEoB3bBABbJ6m6ZdBovN8nNq4_qIsHn33s")
+BOT_TOKEN      = os.environ.get("BOT_TOKEN", "8928084437:AAFy5DEa4lQbe3na06SiCyhdjAusQE0Beck")
 ADMIN_IDS_RAW  = os.environ.get("ADMIN_ID", "7831629041")
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "@bd_top_admin")
 FIREBASE_URL   = os.environ.get("FIREBASE_URL", "https://just-sell-bot-default-rtdb.firebaseio.com")
